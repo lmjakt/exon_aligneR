@@ -25,6 +25,7 @@ struct exon_set exon_set_init(SEXP seq){
     e_set.seq_l[i] = length(s);
     e_set.seq[i] = CHAR(s);
   }
+  return(e_set);
 }
 
 void exon_set_free(struct exon_set e_set){
@@ -61,7 +62,7 @@ double exon_nm(struct exon_set a, struct exon_set b, int a_i, int b_i, int a_n, 
   // the following are for the pointers
   const char left = 1;
   const char up = 2;
-  const char diag = 3;
+  //  const char diag = 3;
   int a_l = 0;
   int b_l = 0;
   for(int i=a_i; i < a_i + a_n; ++i)
@@ -77,8 +78,8 @@ double exon_nm(struct exon_set a, struct exon_set b, int a_i, int b_i, int a_n, 
   // Since we want to use affine gap penalties, we will also need
   // to keep track of the pointers. We can use a char array in the same way.
   char *all_ptr = malloc(sizeof(char) * (a_l + 1) * 2);
-  memset( (void*)all_ptr, sizeof(char) * (a_l + 1) * 2);
-  char *ptr[2] = {all_ptr, ptr + a_l + 1};
+  memset( (void*)all_ptr, 0, sizeof(char) * (a_l + 1) * 2);
+  char *ptr[2] = {all_ptr, all_ptr + a_l + 1};
   // set the scores of the first set of rows. 
   scores[0][1] = gap_i;
   for(int i=2; i <= a_l; ++i){
@@ -90,8 +91,8 @@ double exon_nm(struct exon_set a, struct exon_set b, int a_i, int b_i, int a_n, 
   int a_o = 0;
   int a_j = 0;
   int b_o = 0;
-  int r_1;
-  int r_2;
+  int r_1 = 0;
+  int r_2 = 1;
   for(int row=1; row <= b_l; row++){
     if(b_o == b.seq_l[b_i]){
       b_o = 0;
@@ -124,9 +125,9 @@ double exon_nm(struct exon_set a, struct exon_set b, int a_i, int b_i, int a_n, 
     b_o++;
   }
   double max_score = scores[r_2][a_l];
-  free(all_cores);
+  free(all_scores);
   free(all_ptr);
-  return(max_scores);
+  return(max_score);
 }
 
 // a_seq_r: the sequences of exons of gene a
@@ -146,7 +147,7 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP e_penalties_r, SEXP g_penalty_
   // SANITY check
   if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP )
     error("The first two arguments should be character vectors");
-  if( TYPEOF(e_penalties_r) != REALSXP || TYPEOF(g_penatlies_r) != REALSXP )
+  if( TYPEOF(e_penalties_r) != REALSXP || TYPEOF(g_penalty_r) != REALSXP )
     error("Arguments 3 and 4 should vectors of real numbers");
   if(length(e_penalties_r) != 4)
     error("The third argument should provide: match, mismatch, gap insertion, gap extension values");
@@ -154,7 +155,7 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP e_penalties_r, SEXP g_penalty_
     error("The fourth argument should provide a single value from which we can derive an exon gap penalty");
   
   double *e_penalties = REAL(e_penalties_r);
-  double g_penalty = REAL(g_penalty_r);
+  double g_penalty = REAL(g_penalty_r)[0];
 
   // let us also define the number of exons
   int a_n = length(a_seq_r);

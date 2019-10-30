@@ -16,7 +16,7 @@ names(exons) <- sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]]
 .Call( "align_exons", exons[[1]], exons[[2]], c(4.0, -4.0, -8.0, -1.0), 2.0)
 .Call( "align_exons", exons[[1]], exons[[2]], c(4.0, -4.0, -8.0, -0.5), 2.0)
 
-alignments <- lapply( 1:length(exons), function(i){ .Call( "align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 2.0) })
+alignments <- lapply( 1:length(exons), function(i){ .Call( "align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0) })
     
 
 

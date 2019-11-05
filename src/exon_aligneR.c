@@ -122,6 +122,11 @@ void init_nm_tables( double *scores, char *pointers, int m_height, int m_width,
   memset( (void*)scores, 0, sizeof(double) * m_height * m_width );
   memset( (void*)pointers, 0, sizeof(char) * m_height * m_width);
 
+  /* // We can use this for local alignments by setting gap_i and gap_e to 0. If that is the */
+  /* // the case it is more reasonable to return from here. */
+  /* if(gap_i == 0 && gap_e == 0) */
+  /*   return; */
+  
   // Set the initial scores and pointers
   scores[ m_offset(0, 1, m_height) ] = gap_i;
   scores[ m_offset(1, 0, m_height) ] = gap_i;
@@ -140,8 +145,34 @@ void init_nm_tables( double *scores, char *pointers, int m_height, int m_width,
 
 }
 
+// dp for dynamic programming
+struct dp_max {
+  int row;
+  int column;
+  double max;
+};
+
+struct dp_max dp_max_init(){
+  struct dp_max max;
+  max.row=0;
+  max.column=0;
+  max.max=0;
+  return(max);
+}
+
+void dp_max_update( struct dp_max *max, double score, int row, int column ){
+  if(max->max <= score){
+    max->max = score;
+    max->row = row;
+    max->column = column;
+  }
+}
+
 // expects to be given a table for the pointers since this is necessary to trace the alignment back
-double exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *penalties, double *scores, char *pointers){
+// if local is 1, the alignment is a localised nm where terminal gaps are not penalised. I don't
+// know the proper name of such an alignment, but it may be suitable here..
+struct dp_max exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *penalties,
+	       double *scores, char *pointers, char local){
   // the penalty values
   double match = penalties[0];
   double mis_match = penalties[1];
@@ -155,11 +186,16 @@ double exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *p
   
   // use a full score table. Do not try to minimise memory here. Keep things simply.
   // We assume that both the pointers and the scores tables have been set up with proper dimensions.
-  init_nm_tables( scores, pointers, m_height, m_width, gap_i, gap_e, left, up);
+  if(!local)
+    init_nm_tables( scores, pointers, m_height, m_width, gap_i, gap_e, left, up);
+  else
+    init_nm_tables( scores, pointers, m_height, m_width, 0, 0, left, up);
   
   // And then we simply go through the table positions. Let us make a pointer to the two
   // sequences that we are using
   int o=0, o_l, o_u, o_d;  // offsets for the different positions
+  struct dp_max max = dp_max_init();
+  double left_gap=0, up_gap=0;
   
   for(int row=1; row < m_height; ++row){
     for(int column=1; column < m_width; ++column){
@@ -168,15 +204,32 @@ double exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *p
       o_l = m_offset(row, column-1, m_height);
       o_u = m_offset(row-1, column, m_height);
       o_d = m_offset(row-1, column-1, m_height);
-      sc[0] = scores[o_l] + ( pointers[o_l] == left ? gap_e : gap_i );
-      sc[1] = scores[o_u] + ( pointers[o_u] == up ? gap_e : gap_i );
+      // To 
+      left_gap = (local && row == m_height - 1) ? 0 : ( pointers[o_l] == left ? gap_e : gap_i );
+      up_gap = (local && column == m_width - 1) ? 0 : ( pointers[o_u] == up ? gap_e : gap_i );
+      
+      sc[0] = scores[o_l] + left_gap; // ( pointers[o_l] == left ? gap_e : gap_i );
+      sc[1] = scores[o_u] + up_gap; // ( pointers[o_u] == up ? gap_e : gap_i );
       sc[2] = scores[o_d] + (seq_a[row-1] == seq_b[column-1] ? match : mis_match );
       int max_i = which_max(sc, 3);
       scores[o] = sc[max_i];
       pointers[o] = max_i + 1;
     }
+    //    dp_max_update( &max, scores[o], row, m_width - 1 );
   }
-  return(scores[o]);
+  //  if(!local){
+  max.max = scores[o];
+  max.row = m_height - 1;
+  max.column = m_width - 1;
+  return(max);
+    //  }
+  
+  // if the alignment is local we also need to determine the maximum bottom
+  /* for(int column=1; column < m_width; ++column){ */
+  /*   o = m_offset(m_height-1, column, m_height); */
+  /*   dp_max_update( &max, scores[o], m_height - 1, column ); */
+  /* } */
+  /* return( max ); */
 }
 
 // the use of int for the pointers is wasteful, but it makes it easier to
@@ -258,10 +311,12 @@ void extract_gene_alignment(int *pointers, int height, int width, struct gene_al
   }
 }
 
-void extract_exon_alignment(char *pointers, int height, int width, const char *a, const char *b, char **a_a, char **b_a){
+// It should be possible to use for both local and global alignments.
+void extract_exon_alignment(char *pointers, int height, int width, const char *a, const char *b, struct dp_max max,
+			    char **a_a, char **b_a){
   int al_length = 0;
-  int row = height -1;
-  int column = width -1;
+  int row = max.row;
+  int column = max.column;
   while(row > 0 || column > 0){
     int o = m_offset( row, column, height );
     if(pointers[o] == 0)
@@ -274,8 +329,8 @@ void extract_exon_alignment(char *pointers, int height, int width, const char *a
   *b_a = malloc(sizeof(char) * (al_length + 1));
   (*a_a)[al_length] = 0;
   (*b_a)[al_length] = 0;
-  row = height -1;
-  column = width -1;
+  row = max.row;
+  column = max.column;
   while(row > 0 || column > 0){
     al_length--;
     int o = m_offset( row, column, height );
@@ -293,7 +348,7 @@ void extract_exon_alignment(char *pointers, int height, int width, const char *a
 
 // Assumes that we never get -1 and -1 for both exons. That would be an error that we should
 // check for. But let's write some working code first and then harden it.
-struct aligned_exons extract_exon_alignments(struct transcript a, struct transcript b, struct gene_alignment g_align, double *penalties){
+struct aligned_exons extract_exon_alignments(struct transcript a, struct transcript b, struct gene_alignment g_align, double *penalties, char local){
   // For each row of the gene_alignment table we want to create two char* structs
   // containing the aligned sequences.
   struct aligned_exons aligns = aligned_exons_init( g_align.length );
@@ -322,10 +377,11 @@ struct aligned_exons extract_exon_alignments(struct transcript a, struct transcr
     int m = (a_l + 1) * (b_l + 1);
     scores = realloc( scores, sizeof(double) * m );
     pointers = realloc( pointers, sizeof(char) * m);
-    exon_nm( (a.seq + a.e_offsets[a_i]), (b.seq + b.e_offsets[b_i]),
-	     a.e_lengths[a_i], b.e_lengths[b_i], penalties, scores, pointers );
+    struct dp_max max = exon_nm( (a.seq + a.e_offsets[a_i]), (b.seq + b.e_offsets[b_i]),
+	     a.e_lengths[a_i], b.e_lengths[b_i], penalties, scores, pointers, local );
     // then traverse the score table and work out the length of the alignment...
-    extract_exon_alignment(pointers, a_l + 1, b_l + 1, a.seq + a.e_offsets[a_i], b.seq + b.e_offsets[b_i], aligns.a + i, aligns.b + i);
+    extract_exon_alignment(pointers, a_l + 1, b_l + 1, a.seq + a.e_offsets[a_i], b.seq + b.e_offsets[b_i], max,
+			   aligns.a + i, aligns.b + i);
   }
   free(scores);
   free(pointers);
@@ -338,7 +394,7 @@ struct aligned_exons extract_exon_alignments(struct transcript a, struct transcr
 // g_penalties_r: some parameters that can be used to define the penalties
 //                for the final exon alignments
 SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
-		 SEXP e_penalties_r, SEXP g_penalty_r ){
+		 SEXP e_penalties_r, SEXP g_penalty_r, SEXP local_r ){
   // SANITY check
   if( TYPEOF(e_penalties_r) != REALSXP || TYPEOF(g_penalty_r) != REALSXP )
     error("Arguments 3 and 4 should vectors of real numbers");
@@ -346,13 +402,16 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
     error("The third argument should provide: match, mismatch, gap insertion, gap extension values");
   if(length(g_penalty_r) != 1)
     error("The fourth argument should provide a single value from which we can derive an exon gap penalty");
+  if(TYPEOF(local_r) != LGLSXP)
+    error("The fifth argument should be a logical value determining whether we use localised NM-alignments");
   
   // the transcript_init function sanity checks its SEXP arguments
   struct transcript trans_a = transcript_init(a_seq_r, a_lengths);
   struct transcript trans_b = transcript_init(b_seq_r, b_lengths);
   double *e_penalties = REAL(e_penalties_r);
   double g_penalty = REAL(g_penalty_r)[0];
-
+  char local = (char)asLogical(local_r);
+  
   // Allocate space for a table of scores that we can return to R
   int a_n = trans_a.e_n;
   int b_n = trans_b.e_n;
@@ -374,10 +433,11 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
       int m_size = (1 + trans_a.e_lengths[row]) * (1 + trans_b.e_lengths[column]);
       scores = realloc((void*)scores, sizeof(double) * m_size );
       pointers = realloc((void*)pointers, sizeof(char) * m_size );
-      exon_scores[ m_offset(row, column, a_n) ] = exon_nm( trans_a.seq + trans_a.e_offsets[row],
-							   trans_b.seq + trans_b.e_offsets[column],
-							   trans_a.e_lengths[row], trans_b.e_lengths[column],
-							   e_penalties, scores, pointers );
+      struct dp_max max  = exon_nm( trans_a.seq + trans_a.e_offsets[row],
+				    trans_b.seq + trans_b.e_offsets[column],
+				    trans_a.e_lengths[row], trans_b.e_lengths[column],
+				    e_penalties, scores, pointers, local );
+      exon_scores[ m_offset(row, column, a_n) ] = max.max;
     }
   }
 
@@ -387,7 +447,7 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
   SET_VECTOR_ELT(ret_data, 3, allocMatrix( INTSXP, g_align.length, 2 ));
   memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 3)), (void*)g_align.alignment, sizeof(int) * 2 * g_align.length );
 
-  struct aligned_exons al_exons = extract_exon_alignments(trans_a, trans_b, g_align, e_penalties);
+  struct aligned_exons al_exons = extract_exon_alignments(trans_a, trans_b, g_align, e_penalties, local);
   SET_VECTOR_ELT(ret_data, 4, allocVector(STRSXP, al_exons.length) );
   SET_VECTOR_ELT(ret_data, 5, allocVector(STRSXP, al_exons.length) );
   for(int i=0; i < al_exons.length; ++i){

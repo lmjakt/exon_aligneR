@@ -16,41 +16,6 @@ int m_offset(int row, int column, int height){
   return( column * height + row );
 }
 
-
-// Note that we no longer use the exon_set here. We instead use a transcript
-// As that makes it much easier to merge adjoining exons.
-struct exon_set {
-  int n;
-  char **seq;
-  int *seq_l;
-};
-
-// seq_r must be STRSXP of non-zero length
-// This makes a copy of the strings. That ought not to be necessary, but... 
-struct exon_set exon_set_init(SEXP seq){
-  struct exon_set e_set;
-  e_set.n = length(seq);
-  e_set.seq = malloc( sizeof(const char*) * e_set.n );
-  e_set.seq_l = malloc( sizeof(int) * e_set.n );
-  for(int i=0; i < e_set.n; ++i){
-    SEXP s = STRING_ELT(seq, i);
-    e_set.seq_l[i] = length(s);
-    e_set.seq[i] = malloc( sizeof(char) * (length(s) + 1) );
-    strncpy( e_set.seq[i], CHAR(s), length(s) + 1);
-    e_set.seq[i][ length(s) ] = 0;
-    //    e_set.seq[i] = CHAR(s);
-  }
-  return(e_set);
-}
-
-void exon_set_free(struct exon_set e_set){
-  for(int i=0; i < e_set.n; ++i)
-    free( e_set.seq[i] );
-  free( e_set.seq );
-  free( e_set.seq_l );
-}
-
-
 struct transcript {
   const char *seq;
   int t_length;
@@ -87,6 +52,56 @@ void transcript_free(struct transcript trans){
   free(trans.e_offsets);
 }
 
+char* mk_exon(struct transcript trans, int i){
+  int l = trans.e_lengths[i];
+  char *exon = malloc(sizeof(char) * (1 + l));
+  exon[l] = 0;
+  memcpy((void*) exon, (void*)(trans.seq + trans.e_offsets[i]), sizeof(char) * l );
+  return(exon);
+}
+
+char* mk_gaps(int g_n){
+  char *exon = malloc(sizeof(char) * (g_n + 1));
+  exon[g_n] = 0;
+  memset((void*)exon, '-', g_n);
+  return(exon);
+}
+
+// al_length contains the length of the alignment
+// *alignment is a matrix containing the exon indices
+// at the different positions of the alignment. A gap
+// is indicated by -1.
+// the alignment is filled by column as in R.
+struct gene_alignment {
+  int length;
+  int *alignment;
+};
+
+struct aligned_exons {
+  int length;
+  int *lengths;
+  char **a;
+  char **b;
+};
+
+struct aligned_exons aligned_exons_init(int n){
+  struct aligned_exons al;
+  al.length = n;
+  al.lengths = malloc(sizeof(int) * n);
+  al.a = malloc(sizeof(char*) * n);
+  al.b = malloc(sizeof(char*) * n);
+  return(al);
+}
+
+void aligned_exons_free(struct aligned_exons al){
+  for(int i=0; i < al.length; ++i){
+    free(al.a[i]);
+    free(al.b[i]);
+  }
+  free(al.lengths);
+  free(al.a);
+  free(al.b);
+}
 
 int which_max(double *v, int l){
   int max_i = 0;
@@ -127,9 +142,6 @@ void init_nm_tables( double *scores, char *pointers, int m_height, int m_width,
 
 // expects to be given a table for the pointers since this is necessary to trace the alignment back
 double exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *penalties, double *scores, char *pointers){
-  //double exon_nm(struct exon_set a, struct exon_set b, int a_i, int b_i, double *penalties, double *scores, char *pointers){
-  /* if(a_i >= a.n || b_i >= b.n) */
-  /*   error("a_i >= a.n or b_i >= b.n"); */
   // the penalty values
   double match = penalties[0];
   double mis_match = penalties[1];
@@ -147,9 +159,6 @@ double exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *p
   
   // And then we simply go through the table positions. Let us make a pointer to the two
   // sequences that we are using
-  /* char *seq_a = a.seq[a_i]; */
-  /* char *seq_b = b.seq[b_i]; */
-
   int o=0, o_l, o_u, o_d;  // offsets for the different positions
   
   for(int row=1; row < m_height; ++row){
@@ -173,9 +182,6 @@ double exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, double *p
 // the use of int for the pointers is wasteful, but it makes it easier to
 // interface with R. I would otherwise have to build a table of char*,
 // which is even worse.. 
-/* void gene_nm( struct exon_set a, struct exon_set b, double *exon_scores, */
-/* 	      double match, double gap, */
-/* 	      double *scores, int *pointers ){ */
 void gene_nm( struct transcript a, struct transcript b, double *exon_scores,
 	      double match, double gap,
 	      double *scores, int *pointers ){
@@ -217,19 +223,123 @@ void gene_nm( struct transcript a, struct transcript b, double *exon_scores,
     }
   }
 }
-	      
 
-// a_seq_r: the sequences of exons of gene a
-// b_seq_r: the sequences of exons of gene b
+// height and width are the dimensions of the table, not the number of exons
+void extract_gene_alignment(int *pointers, int height, int width, struct gene_alignment* align){
+  int al_length = 0;
+  int row = height -1;
+  int column = width -1;
+  while(row > 0 || column > 0){
+    int o = m_offset( row, column, height );
+    if(pointers[o] == 0)
+      break;
+    row = (pointers[o] &  2) ? row - 1 : row;
+    column = (pointers[o] & 1) ? column - 1 : column;
+    al_length++;
+  }
+  align->length = al_length;
+  align->alignment = malloc( sizeof(int) * 2 * al_length );
+  int *al_a = align->alignment;
+  int *al_b = align->alignment + al_length;
+  row = height -1;
+  column = width -1;
+  while(row > 0 || column > 0){
+    al_length--;
+    int o = m_offset( row, column, height );
+    if(pointers[o] == 0 || al_length < 0)
+      break;
+    // This asks the same question twice and is hence bad. But the
+    // only alternative I can think of makes use of two if-else
+    // constructs and that too is ugly.
+    al_a[al_length] = (pointers[o] & 2) ? row - 1 : -1;
+    al_b[al_length] = (pointers[o] & 1) ? column - 1 : -1;
+    row = (pointers[o] &  2) ? row - 1 : row;
+    column = (pointers[o] & 1) ? column - 1 : column;
+  }
+}
+
+void extract_exon_alignment(char *pointers, int height, int width, const char *a, const char *b, char **a_a, char **b_a){
+  int al_length = 0;
+  int row = height -1;
+  int column = width -1;
+  while(row > 0 || column > 0){
+    int o = m_offset( row, column, height );
+    if(pointers[o] == 0)
+      break;
+    row = (pointers[o] &  2) ? row - 1 : row;
+    column = (pointers[o] & 1) ? column - 1 : column;
+    al_length++;
+  }
+  *a_a = malloc(sizeof(char) * (al_length + 1));
+  *b_a = malloc(sizeof(char) * (al_length + 1));
+  (*a_a)[al_length] = 0;
+  (*b_a)[al_length] = 0;
+  row = height -1;
+  column = width -1;
+  while(row > 0 || column > 0){
+    al_length--;
+    int o = m_offset( row, column, height );
+    if(pointers[o] == 0 || al_length < 0)
+      break;
+    // This asks the same question twice and is hence bad. But the
+    // only alternative I can think of makes use of two if-else
+    // constructs and that too is ugly.
+    (*a_a)[al_length] = (pointers[o] & 2) ? a[row - 1] : '-';
+    (*b_a)[al_length] = (pointers[o] & 1) ? b[column - 1] : '-';
+    row = (pointers[o] &  2) ? row - 1 : row;
+    column = (pointers[o] & 1) ? column - 1 : column;
+  }
+}
+
+// Assumes that we never get -1 and -1 for both exons. That would be an error that we should
+// check for. But let's write some working code first and then harden it.
+struct aligned_exons extract_exon_alignments(struct transcript a, struct transcript b, struct gene_alignment g_align, double *penalties){
+  // For each row of the gene_alignment table we want to create two char* structs
+  // containing the aligned sequences.
+  struct aligned_exons aligns = aligned_exons_init( g_align.length );
+  int *ex_a = g_align.alignment;
+  int *ex_b = g_align.alignment + g_align.length;
+  double *scores = 0;
+  char *pointers = 0;
+  for(int i=0; i < g_align.length; ++i){
+    int a_i = ex_a[i];
+    int b_i = ex_b[i];
+    if(a_i == -1){
+      aligns.lengths[i] = b.e_lengths[b_i];
+      aligns.a[i] = mk_gaps( b.e_lengths[ b_i ] );
+      aligns.b[i] = mk_exon( b, b_i );
+      continue;
+    }
+    if(b_i == -1){
+      aligns.lengths[i] = a.e_lengths[a_i];
+      aligns.a[i] = mk_exon( a, a_i );
+      aligns.b[i] = mk_gaps( a.e_lengths[a_i] );
+      continue;
+    }
+    // Here I need to align the two exons again.
+    int a_l = a.e_lengths[ a_i ];
+    int b_l = b.e_lengths[ b_i ];
+    int m = (a_l + 1) * (b_l + 1);
+    scores = realloc( scores, sizeof(double) * m );
+    pointers = realloc( pointers, sizeof(char) * m);
+    exon_nm( (a.seq + a.e_offsets[a_i]), (b.seq + b.e_offsets[b_i]),
+	     a.e_lengths[a_i], b.e_lengths[b_i], penalties, scores, pointers );
+    // then traverse the score table and work out the length of the alignment...
+    extract_exon_alignment(pointers, a_l + 1, b_l + 1, a.seq + a.e_offsets[a_i], b.seq + b.e_offsets[b_i], aligns.a + i, aligns.b + i);
+  }
+  free(scores);
+  free(pointers);
+  return(aligns);
+}
+
+// a_seq_r and b_seq_r: transcript sequences
+// a_lengths, b_lengths : the length of exons in transcripts a and b
 // e_penalties_r: the penalties / scores used for aligning sequences to each other
 // g_penalties_r: some parameters that can be used to define the penalties
 //                for the final exon alignments
-//SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP e_penalties_r, SEXP g_penalty_r ){
 SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
 		 SEXP e_penalties_r, SEXP g_penalty_r ){
   // SANITY check
-  /* if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP ) */
-  /*   error("The first two arguments should be character vectors"); */
   if( TYPEOF(e_penalties_r) != REALSXP || TYPEOF(g_penalty_r) != REALSXP )
     error("Arguments 3 and 4 should vectors of real numbers");
   if(length(e_penalties_r) != 4)
@@ -237,25 +347,16 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
   if(length(g_penalty_r) != 1)
     error("The fourth argument should provide a single value from which we can derive an exon gap penalty");
   
+  // the transcript_init function sanity checks its SEXP arguments
   struct transcript trans_a = transcript_init(a_seq_r, a_lengths);
   struct transcript trans_b = transcript_init(b_seq_r, b_lengths);
   double *e_penalties = REAL(e_penalties_r);
   double g_penalty = REAL(g_penalty_r)[0];
 
-  /* // let us also define the number of exons */
-  /* int a_n = length(a_seq_r); */
-  /* int b_n = length(b_seq_r); */
-  /* if(a_n < 1 || b_n < 1) */
-  /*   error("There must be at least one exon for each sequence"); */
-
-  /* // Define two exon sets to hold the data */
-  /* struct exon_set a_exons = exon_set_init( a_seq_r ); */
-  /* struct exon_set b_exons = exon_set_init( b_seq_r ); */
-
   // Allocate space for a table of scores that we can return to R
   int a_n = trans_a.e_n;
   int b_n = trans_b.e_n;
-  SEXP ret_data = PROTECT( allocVector( VECSXP, 3 ));
+  SEXP ret_data = PROTECT( allocVector( VECSXP, 6 ));
   SET_VECTOR_ELT(ret_data, 0, allocMatrix(REALSXP, a_n, b_n ));
   SET_VECTOR_ELT(ret_data, 1, allocMatrix(REALSXP, a_n + 1, b_n + 1 ));
   SET_VECTOR_ELT(ret_data, 2, allocMatrix(INTSXP, a_n + 1, b_n + 1 ));
@@ -277,21 +378,30 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
 							   trans_b.seq + trans_b.e_offsets[column],
 							   trans_a.e_lengths[row], trans_b.e_lengths[column],
 							   e_penalties, scores, pointers );
-      /* exon_scores[ m_offset(row, column, a_n) ] = exon_nm( a_exons.seq[row], b_exons.seq[column], */
-      /* 							   a_exons.seq_l[row], b_exons.seq_l[column], */
-      /* 							   e_penalties, scores, pointers ); */
     }
   }
 
-  //  gene_nm( a_exons, b_exons, exon_scores, e_penalties[0], g_penalty, gene_score_matrix, gene_pointer_matrix );
   gene_nm( trans_a, trans_b, exon_scores, e_penalties[0], g_penalty, gene_score_matrix, gene_pointer_matrix );
+  struct gene_alignment g_align;
+  extract_gene_alignment( gene_pointer_matrix, trans_a.e_n + 1, trans_b.e_n + 1, &g_align );
+  SET_VECTOR_ELT(ret_data, 3, allocMatrix( INTSXP, g_align.length, 2 ));
+  memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 3)), (void*)g_align.alignment, sizeof(int) * 2 * g_align.length );
+
+  struct aligned_exons al_exons = extract_exon_alignments(trans_a, trans_b, g_align, e_penalties);
+  SET_VECTOR_ELT(ret_data, 4, allocVector(STRSXP, al_exons.length) );
+  SET_VECTOR_ELT(ret_data, 5, allocVector(STRSXP, al_exons.length) );
+  for(int i=0; i < al_exons.length; ++i){
+    SET_STRING_ELT( VECTOR_ELT(ret_data, 4), i, mkChar( al_exons.a[i] ));
+    SET_STRING_ELT( VECTOR_ELT(ret_data, 5), i, mkChar( al_exons.b[i] ));
+  }
+  
+  aligned_exons_free(al_exons);
   
   free(scores);
   free(pointers);
+  free(g_align.alignment);
   transcript_free( trans_a );
   transcript_free( trans_b );
-  /* exon_set_free( a_exons ); */
-  /* exon_set_free( b_exons ); */
   UNPROTECT(1);
   return(ret_data);
 }

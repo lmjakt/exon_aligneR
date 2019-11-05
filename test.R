@@ -1,5 +1,5 @@
-dyn.load("src/exon_aligneR_2.so")
-##source("functions.R")
+dyn.load("src/exon_aligneR.so")
+source("functions.R")
 
 ## then we read in a file of sequences
 exons.l <- readLines("exons_PTHR13342")
@@ -14,11 +14,14 @@ names(exons) <- sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]]
 
 
 transcripts <- lapply(exons, function(x){
-    list('l'=sapply(x, nchar), 's'=paste(x, collapse=''))
+    list('l'=unname(sapply(x, nchar)), 's'=paste(x, collapse=''))
 })
     
 
 ### to compare two set of exons:
+
+.Call( "align_exons", transcripts[[1]]$s, transcripts[[2]]$s, transcripts[[1]]$l, transcripts[[2]]$l, c(4.0, -4.0, -8.0, -0.5), 0.5)
+.Call( "align_exons", transcripts[[1]]$s, transcripts[[4]]$s, transcripts[[1]]$l, transcripts[[4]]$l, c(4.0, -4.0, -8.0, -0.5), 0.5)
 
 .Call( "align_exons", exons[[1]], exons[[2]], c(4.0, -4.0, -8.0, -1.0), 0.5)
 .Call( "align_exons", exons[[1]], exons[[2]], c(4.0, -4.0, -8.0, -0.5), 0.5)
@@ -57,7 +60,9 @@ transcripts <- lapply(exons, function(x){
 
 
 
-alignments <- lapply( 1:length(exons), function(i){ .Call("align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 ) })
+##alignments <- lapply( 1:length(exons), function(i){ .Call("align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 ) })
+alignments.2 <- lapply( 1:length(transcripts), function(i){ align.exons( transcripts[[1]], transcripts[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 ) })
+
 
 for(i in 1:100)
     alignments <- lapply( 1:length(exons), function(i){ .Call("align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 )})

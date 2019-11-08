@@ -77,6 +77,13 @@ struct gene_alignment {
   int *alignment;
 };
 
+struct gene_alignment gene_alignment_init(){
+  struct gene_alignment ga;
+  ga.length = 0;
+  ga.alignment = 0;
+  return(ga);
+}
+
 struct aligned_exons {
   int length;
   int *lengths;
@@ -222,22 +229,16 @@ struct dp_max exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, do
   max.row = m_height - 1;
   max.column = m_width - 1;
   return(max);
-    //  }
-  
-  // if the alignment is local we also need to determine the maximum bottom
-  /* for(int column=1; column < m_width; ++column){ */
-  /*   o = m_offset(m_height-1, column, m_height); */
-  /*   dp_max_update( &max, scores[o], m_height - 1, column ); */
-  /* } */
-  /* return( max ); */
 }
 
+// gene_nm should 
 // the use of int for the pointers is wasteful, but it makes it easier to
 // interface with R. I would otherwise have to build a table of char*,
-// which is even worse.. 
-void gene_nm( struct transcript a, struct transcript b, double *exon_scores,
-	      double match, double gap,
-	      double *scores, int *pointers ){
+// which is even worse..
+// if local == TRUE then perform Smith Waterman
+struct dp_max gene_align( struct transcript a, struct transcript b, double *exon_scores,
+		 double match, double gap,
+		 double *scores, int *pointers, char local ){
   int height = a.e_n + 1;
   int width = b.e_n + 1;
   int m_size = width * height;
@@ -246,42 +247,68 @@ void gene_nm( struct transcript a, struct transcript b, double *exon_scores,
 
   int left = 1;
   int up = 2;
-  // init the pointers..
-  for(int row=1; row < height; ++row){
-    int o = m_offset( row, 0, height );
-    int o_u = m_offset( row-1, 0, height );
-    pointers[o] = up;
-    scores[o] = scores[o_u] - match * a.e_lengths[row-1] * gap;
+  // init the pointers.. if not local
+  if(!local){
+    for(int row=1; row < height; ++row){
+      int o = m_offset( row, 0, height );
+      int o_u = m_offset( row-1, 0, height );
+      pointers[o] = up;
+      scores[o] = scores[o_u] - match * a.e_lengths[row-1] * gap;
+    }
+    for(int column=1; column < width; ++column){
+      int o = m_offset( 0, column, height );
+      int o_l = m_offset( 0, column - 1, height );
+      pointers[o] = left;
+      scores[o] = scores[o_l] - match * b.e_lengths[column-1] * gap;
+    }
   }
-  for(int column=1; column < width; ++column){
-    int o = m_offset( 0, column, height );
-    int o_l = m_offset( 0, column - 1, height );
-    pointers[o] = left;
-    scores[o] = scores[o_l] - match * b.e_lengths[column-1] * gap;
-  }
-
+  int o=0;
+  struct dp_max max_pos = dp_max_init();
   for(int row=1; row < height; ++row){
     for(int column=1; column < width; ++column){
-      int o = m_offset(row, column, height);
+      o = m_offset(row, column, height);
       int o_l = m_offset(row, column-1, height);
       int o_u = m_offset(row-1, column, height);
       int o_d = m_offset(row-1, column-1, height);
-      double sc[3];
-      sc[0] = scores[o_l] - match * b.e_lengths[column-1] * gap;
-      sc[1] = scores[o_u] - match * a.e_lengths[row-1] * gap;
-      sc[2] = scores[o_d] + exon_scores[ m_offset(row-1, column-1, height-1) ];
-      int max_i = which_max( sc, 3 );
-      scores[o] = sc[ max_i ];
-      pointers[o] = max_i + 1;
+      double sc[4];
+      sc[0] = 0;
+      sc[1] = scores[o_l] - match * b.e_lengths[column-1] * gap;
+      sc[2] = scores[o_u] - match * a.e_lengths[row-1] * gap;
+      sc[3] = scores[o_d] + exon_scores[ m_offset(row-1, column-1, height-1) ];
+      Rprintf("row: %d column %d previous scores: %f, %f, %f\n", row, column, scores[o_l], scores[o_u], scores[o_d]);
+      Rprintf("sc: %f, %f, %f, %f\n", sc[0], sc[1], sc[2], sc[3]);
+      if(!local){
+	int max_i = which_max( &sc[1], 3 );
+	scores[o] = sc[ max_i +1 ];
+	pointers[o] = max_i + 1;
+	Rprintf("not local, max_i %d  max: %f\n", max_i, sc[ max_i + 1 ]);
+      }else{
+	int max_i = which_max( sc, 4 );
+	scores[o] = sc[ max_i ];
+	pointers[o] = max_i;
+	Rprintf("local, max_i %d  max: %f\n", max_i, sc[ max_i ]);
+      }
+      dp_max_update( &max_pos, scores[o], row, column );
     }
   }
+  // override the global position if not global
+  if(!local){
+    max_pos.max = scores[o];
+    max_pos.row = height - 1;
+    max_pos.column = width - 1;
+  }
+  return( max_pos );
 }
 
+
+
 // height and width are the dimensions of the table, not the number of exons
-void extract_gene_alignment(int *pointers, int height, int width, struct gene_alignment* align){
+void extract_gene_alignment(int *pointers, int height, int width, struct gene_alignment* align, struct dp_max max_pos){
   int al_length = 0;
-  int row = height -1;
-  int column = width -1;
+  /* int row = height -1; */
+  /* int column = width -1; */
+  int row = max_pos.row;
+  int column = max_pos.column;
   while(row > 0 || column > 0){
     int o = m_offset( row, column, height );
     if(pointers[o] == 0)
@@ -290,12 +317,16 @@ void extract_gene_alignment(int *pointers, int height, int width, struct gene_al
     column = (pointers[o] & 1) ? column - 1 : column;
     al_length++;
   }
+  if(!al_length)
+    return;
   align->length = al_length;
   align->alignment = malloc( sizeof(int) * 2 * al_length );
   int *al_a = align->alignment;
   int *al_b = align->alignment + al_length;
-  row = height -1;
-  column = width -1;
+  row = max_pos.row;
+  column = max_pos.column;
+  /* row = height -1; */
+  /* column = width -1; */
   while(row > 0 || column > 0){
     al_length--;
     int o = m_offset( row, column, height );
@@ -394,7 +425,7 @@ struct aligned_exons extract_exon_alignments(struct transcript a, struct transcr
 // g_penalties_r: some parameters that can be used to define the penalties
 //                for the final exon alignments
 SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
-		 SEXP e_penalties_r, SEXP g_penalty_r, SEXP local_r ){
+		 SEXP e_penalties_r, SEXP g_penalty_r, SEXP local_r, SEXP local_gene_r ){
   // SANITY check
   if( TYPEOF(e_penalties_r) != REALSXP || TYPEOF(g_penalty_r) != REALSXP )
     error("Arguments 3 and 4 should vectors of real numbers");
@@ -404,6 +435,8 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
     error("The fourth argument should provide a single value from which we can derive an exon gap penalty");
   if(TYPEOF(local_r) != LGLSXP)
     error("The fifth argument should be a logical value determining whether we use localised NM-alignments");
+  if(TYPEOF(local_gene_r) != LGLSXP)
+    error("The sixth argument should be a logical value determining whether we use localised NM-alignments");
   
   // the transcript_init function sanity checks its SEXP arguments
   struct transcript trans_a = transcript_init(a_seq_r, a_lengths);
@@ -411,6 +444,7 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
   double *e_penalties = REAL(e_penalties_r);
   double g_penalty = REAL(g_penalty_r)[0];
   char local = (char)asLogical(local_r);
+  char local_gene = (char)asLogical(local_gene_r);
   
   // Allocate space for a table of scores that we can return to R
   int a_n = trans_a.e_n;
@@ -441,9 +475,9 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
     }
   }
 
-  gene_nm( trans_a, trans_b, exon_scores, e_penalties[0], g_penalty, gene_score_matrix, gene_pointer_matrix );
-  struct gene_alignment g_align;
-  extract_gene_alignment( gene_pointer_matrix, trans_a.e_n + 1, trans_b.e_n + 1, &g_align );
+  struct dp_max max_pos = gene_align( trans_a, trans_b, exon_scores, e_penalties[0], g_penalty, gene_score_matrix, gene_pointer_matrix, local_gene );
+  struct gene_alignment g_align = gene_alignment_init();
+  extract_gene_alignment( gene_pointer_matrix, trans_a.e_n + 1, trans_b.e_n + 1, &g_align, max_pos );
   SET_VECTOR_ELT(ret_data, 3, allocMatrix( INTSXP, g_align.length, 2 ));
   memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 3)), (void*)g_align.alignment, sizeof(int) * 2 * g_align.length );
 

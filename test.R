@@ -62,10 +62,16 @@ transcripts <- lapply(exons, function(x){
 
 ##alignments <- lapply( 1:length(exons), function(i){ .Call("align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 ) })
 alignments.2 <- lapply( 1:length(transcripts), function(i){ align.exons( transcripts[[1]], transcripts[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 ) })
+alignments.3 <- lapply( 1:length(transcripts), function(i){ align.exons( transcripts[[1]], transcripts[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0, TRUE ) })
 
+alignments.4 <- vector(mode='list', length = (17^2 -17 )/2 )
 
-for(i in 1:100)
-    alignments <- lapply( 1:length(exons), function(i){ .Call("align_exons", exons[[1]], exons[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 )})
+system.time(
+    for(i in 1:100)
+        alignments <- lapply( 1:length(exons), function(i){ align.exons( transcripts[[1]], transcripts[[i]], c(4.0, -4.0, -8.0, -0.5), 1.0 ) })
+)
+
+a2 <- align.exons( transcripts[[4]], transcripts[[9]], c(4.0, -4.0, -8.0, -0.5), 0.1 )
 
 plot.exon.alignments( alignments[[4]] )
 

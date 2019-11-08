@@ -124,29 +124,27 @@ int which_max(double *v, int l){
 
 
 // takes pre-allocated tables
+// take separate values for horizontal and vertical gap penalties to
+// allow funny things.. 
 void init_nm_tables( double *scores, char *pointers, int m_height, int m_width,
-		     double gap_i, double gap_e, const char left, const char up){
+		     double h_gap_i, double h_gap_e, double v_gap_i, double v_gap_e,
+		     const char left, const char up){
   memset( (void*)scores, 0, sizeof(double) * m_height * m_width );
   memset( (void*)pointers, 0, sizeof(char) * m_height * m_width);
 
-  /* // We can use this for local alignments by setting gap_i and gap_e to 0. If that is the */
-  /* // the case it is more reasonable to return from here. */
-  /* if(gap_i == 0 && gap_e == 0) */
-  /*   return; */
-  
   // Set the initial scores and pointers
-  scores[ m_offset(0, 1, m_height) ] = gap_i;
-  scores[ m_offset(1, 0, m_height) ] = gap_i;
+  scores[ m_offset(0, 1, m_height) ] = h_gap_i;
+  scores[ m_offset(1, 0, m_height) ] = v_gap_i;
   pointers[ m_offset(0, 1, m_height) ] = left;
   pointers[ m_offset(1, 0, m_height) ] = up;
 
   // and then fill in the first row and column
   for(int i=2; i < m_width; ++i){
-    scores[ m_offset(0, i, m_height) ] = scores[ m_offset(0, i-1, m_height) ] + gap_e;
+    scores[ m_offset(0, i, m_height) ] = scores[ m_offset(0, i-1, m_height) ] + h_gap_e;
     pointers[ m_offset(0, i, m_height) ] = left;
   }
   for(int i=2; i < m_height; ++i){
-    scores[ m_offset(i, 0, m_height) ] = scores[ m_offset(i-1, 0, m_height) ] + gap_e;
+    scores[ m_offset(i, 0, m_height) ] = scores[ m_offset(i-1, 0, m_height) ] + v_gap_e;
     pointers[ m_offset(i, 0, m_height) ] = up;
   }
 
@@ -193,11 +191,20 @@ struct dp_max exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, do
   
   // use a full score table. Do not try to minimise memory here. Keep things simply.
   // We assume that both the pointers and the scores tables have been set up with proper dimensions.
-  if(!local)
-    init_nm_tables( scores, pointers, m_height, m_width, gap_i, gap_e, left, up);
-  else
-    init_nm_tables( scores, pointers, m_height, m_width, 0, 0, left, up);
-  
+  if(!local){
+    init_nm_tables( scores, pointers, m_height, m_width, gap_i, gap_e, gap_i, gap_e, left, up);
+  }else{
+    double h_gap_i=gap_i, h_gap_e=gap_e, v_gap_i=gap_i, v_gap_e=gap_e;
+    if(m_width > m_height){
+      h_gap_i = 0;
+      h_gap_e = 0;
+    }
+    if(m_height > m_width){
+      v_gap_i = 0;
+      v_gap_e = 0;
+    }
+    init_nm_tables( scores, pointers, m_height, m_width, h_gap_i, h_gap_e, v_gap_i, v_gap_e, left, up);
+  }
   // And then we simply go through the table positions. Let us make a pointer to the two
   // sequences that we are using
   int o=0, o_l, o_u, o_d;  // offsets for the different positions
@@ -211,9 +218,10 @@ struct dp_max exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, do
       o_l = m_offset(row, column-1, m_height);
       o_u = m_offset(row-1, column, m_height);
       o_d = m_offset(row-1, column-1, m_height);
-      // To 
-      left_gap = (local && row == m_height - 1) ? 0 : ( pointers[o_l] == left ? gap_e : gap_i );
-      up_gap = (local && column == m_width - 1) ? 0 : ( pointers[o_u] == up ? gap_e : gap_i );
+      // We only want to allow gaps for one of the directions. I.e. the minimal score should not
+      // be 0. 
+      left_gap = (m_width > m_height && local && row == m_height - 1) ? 0 : ( pointers[o_l] == left ? gap_e : gap_i );
+      up_gap = (m_height > m_width && local && column == m_width - 1) ? 0 : ( pointers[o_u] == up ? gap_e : gap_i );
       
       sc[0] = scores[o_l] + left_gap; // ( pointers[o_l] == left ? gap_e : gap_i );
       sc[1] = scores[o_u] + up_gap; // ( pointers[o_u] == up ? gap_e : gap_i );
@@ -275,18 +283,18 @@ struct dp_max gene_align( struct transcript a, struct transcript b, double *exon
       sc[1] = scores[o_l] - match * b.e_lengths[column-1] * gap;
       sc[2] = scores[o_u] - match * a.e_lengths[row-1] * gap;
       sc[3] = scores[o_d] + exon_scores[ m_offset(row-1, column-1, height-1) ];
-      Rprintf("row: %d column %d previous scores: %f, %f, %f\n", row, column, scores[o_l], scores[o_u], scores[o_d]);
-      Rprintf("sc: %f, %f, %f, %f\n", sc[0], sc[1], sc[2], sc[3]);
+      /* Rprintf("row: %d column %d previous scores: %f, %f, %f\n", row, column, scores[o_l], scores[o_u], scores[o_d]); */
+      /* Rprintf("sc: %f, %f, %f, %f\n", sc[0], sc[1], sc[2], sc[3]); */
       if(!local){
 	int max_i = which_max( &sc[1], 3 );
 	scores[o] = sc[ max_i +1 ];
 	pointers[o] = max_i + 1;
-	Rprintf("not local, max_i %d  max: %f\n", max_i, sc[ max_i + 1 ]);
+	//	Rprintf("not local, max_i %d  max: %f\n", max_i, sc[ max_i + 1 ]);
       }else{
 	int max_i = which_max( sc, 4 );
 	scores[o] = sc[ max_i ];
 	pointers[o] = max_i;
-	Rprintf("local, max_i %d  max: %f\n", max_i, sc[ max_i ]);
+	//	Rprintf("local, max_i %d  max: %f\n", max_i, sc[ max_i ]);
       }
       dp_max_update( &max_pos, scores[o], row, column );
     }

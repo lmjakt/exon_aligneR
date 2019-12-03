@@ -3,7 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
-
+#include "needleman_wunsch.h"
 
 // This is a rewrite of exon_aligneR.c
 // Modified to:
@@ -11,10 +11,6 @@
 // 2. Always place seq 1 (a) by rows and seq 2 (b) by columns
 // 3. Remove the merge functionaliy
 
-// To enforce the matrices; always use this
-int m_offset(int row, int column, int height){
-  return( column * height + row );
-}
 
 struct transcript {
   const char *seq;
@@ -108,18 +104,6 @@ void aligned_exons_free(struct aligned_exons al){
   free(al.lengths);
   free(al.a);
   free(al.b);
-}
-
-int which_max(double *v, int l){
-  int max_i = 0;
-  double max = v[0];
-  for(int i=1; i < l; i++){
-    if(v[i] > max){
-      max = v[i];
-      max_i = i;
-    }
-  }
-  return(max_i);
 }
 
 
@@ -226,7 +210,7 @@ struct dp_max exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, do
       sc[0] = scores[o_l] + left_gap; // ( pointers[o_l] == left ? gap_e : gap_i );
       sc[1] = scores[o_u] + up_gap; // ( pointers[o_u] == up ? gap_e : gap_i );
       sc[2] = scores[o_d] + (seq_a[row-1] == seq_b[column-1] ? match : mis_match );
-      int max_i = which_max(sc, 3);
+      int max_i = which_max_d(sc, 3);
       scores[o] = sc[max_i];
       pointers[o] = max_i + 1;
     }
@@ -239,11 +223,10 @@ struct dp_max exon_nm(const char *seq_a, const char *seq_b, int a_l, int b_l, do
   return(max);
 }
 
-// gene_nm should 
 // the use of int for the pointers is wasteful, but it makes it easier to
 // interface with R. I would otherwise have to build a table of char*,
 // which is even worse..
-// if local == TRUE then perform Smith Waterman
+// if local == TRUE then perform a Smith Waterman
 struct dp_max gene_align( struct transcript a, struct transcript b, double *exon_scores,
 		 double match, double gap,
 		 double *scores, int *pointers, char local ){
@@ -286,12 +269,12 @@ struct dp_max gene_align( struct transcript a, struct transcript b, double *exon
       /* Rprintf("row: %d column %d previous scores: %f, %f, %f\n", row, column, scores[o_l], scores[o_u], scores[o_d]); */
       /* Rprintf("sc: %f, %f, %f, %f\n", sc[0], sc[1], sc[2], sc[3]); */
       if(!local){
-	int max_i = which_max( &sc[1], 3 );
+	int max_i = which_max_d( &sc[1], 3 );
 	scores[o] = sc[ max_i +1 ];
 	pointers[o] = max_i + 1;
 	//	Rprintf("not local, max_i %d  max: %f\n", max_i, sc[ max_i + 1 ]);
       }else{
-	int max_i = which_max( sc, 4 );
+	int max_i = which_max_d( sc, 4 );
 	scores[o] = sc[ max_i ];
 	pointers[o] = max_i;
 	//	Rprintf("local, max_i %d  max: %f\n", max_i, sc[ max_i ]);
@@ -507,3 +490,95 @@ SEXP align_exons(SEXP a_seq_r, SEXP b_seq_r, SEXP a_lengths, SEXP b_lengths,
   UNPROTECT(1);
   return(ret_data);
 }
+
+SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
+		SEXP sub_matrix_r, SEXP gap_r,
+		SEXP tgaps_free_r, SEXP special_char_r){
+  if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP || TYPEOF(special_char_r) != STRSXP )
+    error("a_seq_r, b_seq_r and special_char_r must all be R strings");
+  if( TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
+    error("al_offset_r and al_size_r must both be ints");
+  if( TYPEOF(sub_matrix_r) != INTSXP || !isMatrix(sub_matrix_r) )
+    error("sub_matrix_r should be a numeric matrix");
+  if( TYPEOF(gap_r) != INTSXP || length(gap_r) != 2 )
+    error("gap_r should be an integer vector of length 2 (insertion, extension)");
+  if( TYPEOF(tgaps_free_r) != LGLSXP )
+    error("tgaps_free_r should be a logical vector");
+  if(length(al_offset_r) != 1 || length(al_size_r) != 1 || length(a_seq_r) != 1
+     || length(b_seq_r) != 1 || length(tgaps_free_r) != 1 || length(special_char_r) != 1 )
+    error("most arguments should have a length of one");
+
+  int al_offset = asInteger(al_offset_r);
+  int al_size = asInteger(al_size_r);
+  
+  SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
+  int nrow = INTEGER(sub_matrix_dims)[0];
+  int ncol = INTEGER(sub_matrix_dims)[1];
+  if(nrow != ncol || nrow != al_size)
+    error("faulty matrix dimensions: %d, %d should both be: %d", nrow, ncol, al_size);
+  int *sub_table = INTEGER( sub_matrix_r );
+  int tgaps_free = asLogical( tgaps_free_r );
+
+  int a_l = length( STRING_ELT( a_seq_r, 0 ));
+  const unsigned char *a_seq = (const unsigned char*)CHAR( STRING_ELT( a_seq_r, 0 ));
+  int b_l = length( STRING_ELT( b_seq_r, 0 ));
+  const unsigned char *b_seq = (const unsigned char*)CHAR( STRING_ELT( b_seq_r, 0 ));
+
+  int *gap = INTEGER(gap_r);
+  
+  // We can then allocate the required memorey. No chars everything is in ints
+  SEXP ret_data = PROTECT(allocVector( VECSXP, 6 ));
+  SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l+1, b_l+1 ));
+  SET_VECTOR_ELT( ret_data, 1, allocMatrix( INTSXP, a_l+1, b_l+1 ));
+  SET_VECTOR_ELT( ret_data, 2, allocVector( STRSXP, 2 ));
+
+  int *score_table = INTEGER( VECTOR_ELT( ret_data, 0 ));
+  int *ptr_table = INTEGER( VECTOR_ELT( ret_data, 1 ));
+
+  needleman_wunsch( a_seq, b_seq, a_l, b_l, gap[0], gap[1], sub_table, al_offset, al_size, tgaps_free,
+  		    score_table, ptr_table );
+
+  char *al, *bl;  // a and b aligned
+  extract_nm_alignment( ptr_table, a_l+1, b_l+1, (const char*)a_seq, (const char*)b_seq, &al, &bl );
+
+  SET_STRING_ELT( VECTOR_ELT(ret_data, 2), 0, mkChar( al ));
+  SET_STRING_ELT( VECTOR_ELT(ret_data, 2), 1, mkChar( bl ));
+
+  int special_n = length( STRING_ELT( special_char_r, 0 ) );
+  if( special_n > 0 ){
+    const char *special_char = CHAR( STRING_ELT( special_char_r, 0 ) );
+    int a_sl, b_sl;
+    int *a_s, *b_s;
+    char_at( al, special_char[0], &a_s, &a_sl );
+    char_at( bl, special_char[0], &b_s, &b_sl );
+    int al_nrows;
+    int *al_table = aligned_i( a_s, b_s, a_sl, b_sl, &al_nrows );
+    SET_VECTOR_ELT( ret_data, 3, allocVector( INTSXP, a_sl ));
+    SET_VECTOR_ELT( ret_data, 4, allocVector( INTSXP, b_sl ));
+    SET_VECTOR_ELT( ret_data, 5, allocMatrix( INTSXP, al_nrows, 2 ));
+    memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 3)), (void*)a_s, sizeof(int) * a_sl);
+    memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 4)), (void*)b_s, sizeof(int) * b_sl);
+    memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 5)), (void*)al_table, sizeof(int) * 2 * al_nrows );
+    free(a_s);
+    free(b_s);
+    free( al_table );
+  }
+
+  free(al);
+  free(bl);
+  
+  UNPROTECT(1);
+  return( ret_data);
+}
+
+static const R_CallMethodDef callMethods[] = {
+  {"align_exons", (DL_FUNC)&align_exons, 8},
+  {"align_seqs", (DL_FUNC)&align_seqs, 8},
+  {NULL, NULL, 0}
+};
+
+void R_init_exon_aligneR(DllInfo *info)
+{
+  R_registerRoutines(info, NULL, callMethods, NULL, NULL);
+}
+ 

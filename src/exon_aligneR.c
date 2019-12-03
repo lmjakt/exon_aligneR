@@ -527,7 +527,7 @@ SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   int *gap = INTEGER(gap_r);
   
   // We can then allocate the required memorey. No chars everything is in ints
-  SEXP ret_data = PROTECT(allocVector( VECSXP, 6 ));
+  SEXP ret_data = PROTECT(allocVector( VECSXP, 7 ));
   SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l+1, b_l+1 ));
   SET_VECTOR_ELT( ret_data, 1, allocMatrix( INTSXP, a_l+1, b_l+1 ));
   SET_VECTOR_ELT( ret_data, 2, allocVector( STRSXP, 2 ));
@@ -539,7 +539,7 @@ SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   		    score_table, ptr_table );
 
   char *al, *bl;  // a and b aligned
-  extract_nm_alignment( ptr_table, a_l+1, b_l+1, (const char*)a_seq, (const char*)b_seq, &al, &bl );
+  struct align_stats al_stats = extract_nm_alignment( ptr_table, a_l+1, b_l+1, (const char*)a_seq, (const char*)b_seq, &al, &bl );
 
   SET_STRING_ELT( VECTOR_ELT(ret_data, 2), 0, mkChar( al ));
   SET_STRING_ELT( VECTOR_ELT(ret_data, 2), 1, mkChar( bl ));
@@ -563,6 +563,10 @@ SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
     free(b_s);
     free( al_table );
   }
+
+  // and then let us get the stats
+  SET_VECTOR_ELT( ret_data, 6, allocVector( INTSXP, sizeof(al_stats) / sizeof(int) ));
+  memcpy( (void*)INTEGER(VECTOR_ELT(ret_data, 6)), &al_stats, sizeof(al_stats) );
 
   free(al);
   free(bl);

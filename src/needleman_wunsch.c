@@ -92,6 +92,26 @@ void init_ptr( int *ptr, int height, int width, const int left, const int up ){
     ptr[ i * height ] = left;
 }
 
+struct align_stats align_stats_init(){
+  struct align_stats as;
+  as.al_length = 0;
+  as.al_n = 0;
+  as.a_gap_i = 0;
+  as.b_gap_i = 0;
+  as.a_gap = 0;
+  as.b_gap = 0;
+  as.a_gap_l = 0;
+  as.a_gap_r = 0;
+  as.b_gap_l = 0;
+  as.b_gap_r = 0;
+  as.match_n = 0;
+  as.mismatch_n = 0;
+  // better or worse as:
+  //  memset( (void*)&as, 0, sizeof(as) );
+  return(as);
+}
+
+
 // a is represented by rows, b, by columns, to be consistent with R
 void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, int b_l,
 		       int gap_i, int gap_e,
@@ -145,7 +165,7 @@ void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, 
   
 }
 
-void extract_nm_alignment(int *pointers, int height, int width, const char *a, const char *b,
+struct align_stats extract_nm_alignment(int *pointers, int height, int width, const char *a, const char *b,
 			  char **a_a, char **b_a){
   int al_length = 0;
   int row = height-1; // max.row;
@@ -164,6 +184,10 @@ void extract_nm_alignment(int *pointers, int height, int width, const char *a, c
   (*b_a)[al_length] = 0;
   row = height-1; //max.row;
   column = width-1; // max.column;
+  // Let us count gaps, gap insertions, matches, mismatches
+  char last_a=0, last_b=0;  //
+  char ac=0, bc=0;
+  struct align_stats stats = align_stats_init();
   while(row > 0 || column > 0){
     al_length--;
     int o = m_offset( row, column, height );
@@ -176,7 +200,32 @@ void extract_nm_alignment(int *pointers, int height, int width, const char *a, c
     (*b_a)[al_length] = (pointers[o] & 1) ? b[column - 1] : '-';
     row = (pointers[o] &  2) ? row - 1 : row;
     column = (pointers[o] & 1) ? column - 1 : column;
+    // The alignment stats
+    ac = (*a_a)[al_length];
+    bc = (*b_a)[al_length];
+    stats.al_length++;
+    stats.al_n += ( ac != '-' && bc != '-' ) ? 1 : 0;
+    if( ac == '-' ){
+      stats.a_gap++;
+      stats.a_gap_i += ( last_a == '-' ? 0 : 1 );
+      stats.a_gap_l += (row == 0) ? 1 : 0;
+      stats.a_gap_r += (row == height-1) ? 1 : 0;
+    }
+    if( bc == '-' ){
+      stats.b_gap++;
+      stats.b_gap_i += ( last_b == '-' ? 0 : 1 );
+      stats.b_gap_l += (column == 0) ? 1 : 0;
+      stats.b_gap_r += (column == width - 1) ? 1 : 0;
+    }
+    if( ac == bc )
+      stats.match_n++;
+    else
+      stats.mismatch_n += (ac == '-' || bc == '-') ? 0 : 1;
+    // and.. 
+    last_a = ac;
+    last_b = bc;
   }
+  return(stats);
 }
 
 // finds the positions of occurences of the character c in word

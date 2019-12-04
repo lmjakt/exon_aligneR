@@ -575,6 +575,224 @@ SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   return( ret_data);
 }
 
+// To make a mulithreaded version I need to first define a struct that takes the arguments
+// that need to be passed to needlmean_wunsch and extract_nm_alignment
+// Note that since this is for high-throughput alignments we do not return the scoring matrices
+// so we do not need to have these passed in as arguments
+
+// we do not really need an initialiser as we can simply use memset here
+struct needle_wunsch_results {
+  char *al_a, *al_b;      // sequences with gaps
+  int *a_pos, *b_pos;     // positions of special characters
+  int a_pos_l, b_pos_l;   // number of special characters in each sequence
+  int *pos_table;         // a table of the ones that have been aligned.
+  int pos_table_nrow;     // the number of rows in the table
+  int score;
+  struct align_stats al_stats;
+};
+
+struct needle_wunsch_args {
+  // to create the scoring matrix:
+  const unsigned char *a, **b;    // the sequences
+  int a_l;                       // length of the single sequence a
+  int b_n;                       // number of b sequences
+  int *b_l;                      // the lengths of the b sequences
+  int gap_i, gap_e;              // gap insertion and gap extension penalties
+  int *sub_table;                // the substitution matrix
+  int al_offset, al_size;        // the alphabet offset and size
+  int tgaps_free;                // 0/1: should terminal gaps in the shorter sequence be free
+  char special_char;
+  // to extract the alignment:
+  struct *needle_wunsch_results ret_data;  // b_n results
+  unsigned char *jobs;                      // b_n jobs, 0 if not yet done
+  pthread_mutex_t *mutex;
+};
+
+
+
+// 
+struct needle_wunsch_args needle_wunsch_args_init(const unsigned char *a, int a_l, const unsigned char **b, int b_n, int *b_l,
+						    int gap_i, int gap_e, int *sub_table, int al_offset, int al_size, int tgaps_free,
+						    char special_char, pthread_mutex_t *mutex
+						    ){
+  struct needle_wunsch_args args;
+  args.a = a;
+  args.a_l = a_l;
+  args.b = b;
+  args.b_n = b_n;
+  args.b_l = b_l;
+  args.gap_i = gap_i;
+  args.gap_e = gap_e;
+  args.sub_table = sub_table;
+  args.al_offset = al_offset;
+  args.al_size = al_size;
+  args.tgaps_free = tgaps_free;
+  args.special_char = special_char;
+  args.mutex = mutex;
+  
+  // other pointers are best initialised to 0, so that freeing them doesn't hurt..
+  args.ret_data = malloc( sizeof(struct needle_wunsch_results) * b_n );
+  args.jobs = malloc( sizeof(unsigned char) * b_n );
+  // and initialise the data to something useful.. 
+  memset( (void*)args.ret_data, 0, sizeof(struct needle_wunsch_results) * b_n );
+  memset( (void*)args.jobs, 0, sizeof(unsigned char) * b_n );
+
+}
+
+void needle_wunsch_args_free( struct *needle_wunsch_args args ){
+  for(int i=0; i < args.b_n; ++i){
+    free( args->ret_data[i].al_a )
+    free( args->ret_data[i].al_b )
+    free( args->ret_data[i].a_pos )
+    free( args->ret_data[i].b_pos )
+    free( args->ret_data[i].pos_table )
+  }
+  free( args->ret_data );
+  free( args->jobs );
+}
+
+// And a method that performs a single alignment for the given sequences..
+void * needleman_wunsch_thread(void *args_ptr){
+  struct needle_wunsh_args *args = (struct needle_wunsh_args*)args_ptr;
+  int score_table = 0;
+  int ptr_table = 0;
+  int i = 0; // the current job
+  while(1){
+    pthread_mutex_lock( args->mutex );
+    while( i < args->b_n && args->jobs[ i ] )
+      ++i;
+    if(args->jobs[i])
+      ++i;             // we can check..
+    else
+      args->jobs[i] = 1;
+    pthread_mutex_unlock( args->mutex );
+    if( i >= args->b_n )
+      break;
+    
+    int height = args->a_l + 1;
+    int width = args->b_l[i] + 1;
+    *score_table = realloc((void*)scrore_table, sizeof(int) * width * height );
+    *ptr_table = realloc((void*)ptr_table, sizeof(int) * width * height );
+    
+    needleman_wunsch( args->a, args->b[i], args->a_l, args->b_l[i],
+		      args->gap_i, args->gap_e,
+		      args->sub_table, args->al_offset, args->al_size,
+		      score_table, ptr_table);
+    
+    struct needle_wunsch_results *ret_data = &(args->ret_data[i]);
+    ret_data->score = score_table[ width * height - 1 ];
+    ret_data->al_stats = extract_nm_alignment(ptr_table, height, width, args->a, args->b[i],
+					      &(ret_data->al_a), &(ret_data->al_b));
+    
+    char_at( ret_data->al_a, args->special_char, &(ret_data->pos_a), &(ret_data->pos_a_l));
+    char_at( ret_data->al_b, args->special_char, &(ret_data->pos_b), &(ret_data->pos_b_l));
+    ret_data->pos_table = aligned_i( ret_data->pos_a, ret_data->pos_b, ret_data->pos_a_l, ret_data->pos_b_l,
+				     &(ret_data->pos_table_nrow) );
+  }
+  free(score_table);
+  free(ptr_table);
+  pthread_cond_signal( &cond );
+  pthread_exit((void*)args_ptr);
+}
+    
+
+SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
+		   SEXP sub_matrix_r, SEXP gap_r,
+		   SEXP tgaps_free_r, SEXP special_char_r, SEXP n_thread_r){
+  if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP || TYPEOF(special_char_r) != STRSXP )
+    error("a_seq_r, b_seq_r and special_char_r must all be R strings");
+  if( TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
+    error("al_offset_r and al_size_r must both be ints");
+  if( TYPEOF(sub_matrix_r) != INTSXP || !isMatrix(sub_matrix_r) )
+    error("sub_matrix_r should be a numeric matrix");
+  if( TYPEOF(gap_r) != INTSXP || length(gap_r) != 2 )
+    error("gap_r should be an integer vector of length 2 (insertion, extension)");
+  if( TYPEOF(tgaps_free_r) != LGLSXP )
+    error("tgaps_free_r should be a logical vector");
+  if( TYPEOF(n_thread_r) != INTSXP || length(n_thread_r) != 1)
+    error("n_thread_r should be an integer vector of length 1");
+  if(length(al_offset_r) != 1 || length(al_size_r) != 1 || length(a_seq_r) != 1
+     || length(b_seq_r) < 1 || length(tgaps_free_r) != 1 || length(special_char_r) != 1 )
+    error("most arguments should have a length of one (b_seq_r may have more than one sequence)");
+
+  int al_offset = asInteger(al_offset_r);
+  int al_size = asInteger(al_size_r);
+  
+  SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
+  int nrow = INTEGER(sub_matrix_dims)[0];
+  int ncol = INTEGER(sub_matrix_dims)[1];
+  if(nrow != ncol || nrow != al_size)
+    error("faulty matrix dimensions: %d, %d should both be: %d", nrow, ncol, al_size);
+  int *sub_table = INTEGER( sub_matrix_r );
+  int tgaps_free = asLogical( tgaps_free_r );
+
+  if(!length(STRING_ELT(special_char_r, 0)))
+    error("A special character mush be given");
+
+  char special_char = CHAR( STRING_ELT( special_char_r, 0) )[0];
+  int a_l = length( STRING_ELT( a_seq_r, 0 ));
+  const unsigned char *a_seq = (const unsigned char*)CHAR( STRING_ELT( a_seq_r, 0 ));
+
+  int *gap = INTEGER(gap_r);
+  int n_thread = asInteger( n_thread_r );
+  if(n_thread <= 1)
+    error("n_thread must be larger than 0!");
+  
+  // We now need to set up vectors containing the appropriate b sequences
+  int b_n = length(b_seq_r);
+  int *b_l = malloc( sizeof(int) * b_n );
+  const unsigned char **b_seq = malloc( sizeof(const char*) * b_n );
+  for(int i=0; i < b_n; ++i){
+    b_l[i] = length( STRING_ELT( b_seq_r, i ));
+    b_seq[i] = (const unsigned char*)CHAR( STRING_ELT( b_seq_r, 0 ));
+  }
+  // reduce the thread number if we have fewer b_sequences than threads
+  if( b_n < n_thread )
+    n_thread = b_n;
+
+  pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+  // The we have to set up arrays of pthreads and needle_wunsch_args
+  struct needle_wunsch_args args = needle_wunsch_args_init(a_seq, a_l, b_seq, b_n, b_l, gap[0], gap[1],
+							   sub_table, al_offset, al_size, tgaps_free,
+							   special_char, &mutex);
+							   
+  pthread_t *threads = malloc( sizeof(pthread_t), n_thread );
+  for(int i=0; i < n_thread; ++i){
+    pthread_create( &threads[i], NULL, needleman_wunsch_thread, (void*)&args );
+  }
+  // then we wait for all threads t exit..
+  void *status;
+  for(int i=0; i < n_thread; ++i)
+    pthread_join(threads[i], &status);
+
+  // 1. Create the R data structures
+  // 2. Copy over the data to these
+  // 3. Clean up allocated data and then return.
+  SEXP ret_data = PROTECT( allocVector( VECSXP, b_n )); 
+  for(int i=0; i < b_n; ++i){
+    SET_VECTOR_ELT( ret_data, i, allocVector( VECSXP, 5 ));
+    SEXP rd = GET_VECTOR_ELT(ret_data, i);
+    SET_VECTOR_ELT( rd, 0, allocVector( INTSXP, 1 + sizeof( struct align_stats ) / sizeof(int) ));
+    SET_VECTOR_ELT( rd, 1, allocVector( STRSXP, 2 ));  // the sequences
+    SET_VECTOR_ELT( rd, 2, allocVector( INTSXP, args->ret_data[i].a_pos_l ));
+    SET_VECTOR_ELT( rd, 3, allocVector( INTSXP, args->ret_data[i].b_pos_l ));
+    SET_VECTOR_ELT( rd, 4, allocMatrix( INTSXP, args->ret_data[i].pos_table_nrow, 2));
+    // this is a bit dodgy, but trying to merge the score and the align_stats together
+    INTEGER(VECTOR_ELT(rd, 0))[0] = args->ret_data[i].score;
+    memcpy( (void*)(1 + INTEGER(VECTOR_ELT(rd, 0))), (void*)&(args->ret_data[i].al_stats), sizeof(struct align_stats) );
+    SET_STRING_ELT( VECTOR_ELT(rd, 1), 0, mkChar( args->ret_data[i].al_a ));
+    SET_STRING_ELT( VECTOR_ELT(rd, 1), 1, mkChar( args->ret_data[i].al_b ));
+    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 2)), args->ret_data[i].a_pos, sizeof(int) * args->ret_data[i].a_pos_l );
+    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 3)), args->ret_data[i].b_pos, sizeof(int) * args->ret_data[i].b_pos_l );
+    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 3)), args->ret_data[i].pos_table, sizeof(int) * 2 * args->ret_data[i].pos_table_nrow );
+  }
+  needle_wunsch_args_free( args );
+  free(b_l);
+  free(b_seq);
+  UNPROTECT(1);
+  return( ret_data );
+}
+
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},

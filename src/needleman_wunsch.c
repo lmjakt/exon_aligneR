@@ -165,7 +165,7 @@ void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, 
   
 }
 
-struct align_stats extract_nm_alignment(int *pointers, int height, int width, const char *a, const char *b,
+struct align_stats extract_nm_alignment(int *pointers, int height, int width, const unsigned char *a, const unsigned char *b,
 			  char **a_a, char **b_a){
   int al_length = 0;
   int row = height-1; // max.row;

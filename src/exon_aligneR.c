@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 #include "needleman_wunsch.h"
 
 // This is a rewrite of exon_aligneR.c
@@ -266,18 +267,14 @@ struct dp_max gene_align( struct transcript a, struct transcript b, double *exon
       sc[1] = scores[o_l] - match * b.e_lengths[column-1] * gap;
       sc[2] = scores[o_u] - match * a.e_lengths[row-1] * gap;
       sc[3] = scores[o_d] + exon_scores[ m_offset(row-1, column-1, height-1) ];
-      /* Rprintf("row: %d column %d previous scores: %f, %f, %f\n", row, column, scores[o_l], scores[o_u], scores[o_d]); */
-      /* Rprintf("sc: %f, %f, %f, %f\n", sc[0], sc[1], sc[2], sc[3]); */
       if(!local){
 	int max_i = which_max_d( &sc[1], 3 );
 	scores[o] = sc[ max_i +1 ];
 	pointers[o] = max_i + 1;
-	//	Rprintf("not local, max_i %d  max: %f\n", max_i, sc[ max_i + 1 ]);
       }else{
 	int max_i = which_max_d( sc, 4 );
 	scores[o] = sc[ max_i ];
 	pointers[o] = max_i;
-	//	Rprintf("local, max_i %d  max: %f\n", max_i, sc[ max_i ]);
       }
       dp_max_update( &max_pos, scores[o], row, column );
     }
@@ -539,7 +536,7 @@ SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   		    score_table, ptr_table );
 
   char *al, *bl;  // a and b aligned
-  struct align_stats al_stats = extract_nm_alignment( ptr_table, a_l+1, b_l+1, (const char*)a_seq, (const char*)b_seq, &al, &bl );
+  struct align_stats al_stats = extract_nm_alignment( ptr_table, a_l+1, b_l+1, a_seq, b_seq, &al, &bl );
 
   SET_STRING_ELT( VECTOR_ELT(ret_data, 2), 0, mkChar( al ));
   SET_STRING_ELT( VECTOR_ELT(ret_data, 2), 1, mkChar( bl ));
@@ -603,7 +600,7 @@ struct needle_wunsch_args {
   int tgaps_free;                // 0/1: should terminal gaps in the shorter sequence be free
   char special_char;
   // to extract the alignment:
-  struct *needle_wunsch_results ret_data;  // b_n results
+  struct needle_wunsch_results *ret_data;  // b_n results
   unsigned char *jobs;                      // b_n jobs, 0 if not yet done
   pthread_mutex_t *mutex;
 };
@@ -636,26 +633,26 @@ struct needle_wunsch_args needle_wunsch_args_init(const unsigned char *a, int a_
   // and initialise the data to something useful.. 
   memset( (void*)args.ret_data, 0, sizeof(struct needle_wunsch_results) * b_n );
   memset( (void*)args.jobs, 0, sizeof(unsigned char) * b_n );
-
+  return(args);
 }
 
-void needle_wunsch_args_free( struct *needle_wunsch_args args ){
-  for(int i=0; i < args.b_n; ++i){
-    free( args->ret_data[i].al_a )
-    free( args->ret_data[i].al_b )
-    free( args->ret_data[i].a_pos )
-    free( args->ret_data[i].b_pos )
-    free( args->ret_data[i].pos_table )
+void needle_wunsch_args_free( struct needle_wunsch_args *args ){
+  for(int i=0; i < args->b_n; ++i){
+    free( args->ret_data[i].al_a );
+    free( args->ret_data[i].al_b );
+    free( args->ret_data[i].a_pos );
+    free( args->ret_data[i].b_pos );
+    free( args->ret_data[i].pos_table );
   }
   free( args->ret_data );
   free( args->jobs );
 }
 
 // And a method that performs a single alignment for the given sequences..
-void * needleman_wunsch_thread(void *args_ptr){
-  struct needle_wunsh_args *args = (struct needle_wunsh_args*)args_ptr;
-  int score_table = 0;
-  int ptr_table = 0;
+void* needleman_wunsch_thread(void *args_ptr){
+  struct needle_wunsch_args *args = (struct needle_wunsch_args*)args_ptr;
+  int *score_table = 0;
+  int *ptr_table = 0;
   int i = 0; // the current job
   while(1){
     pthread_mutex_lock( args->mutex );
@@ -671,27 +668,28 @@ void * needleman_wunsch_thread(void *args_ptr){
     
     int height = args->a_l + 1;
     int width = args->b_l[i] + 1;
-    *score_table = realloc((void*)scrore_table, sizeof(int) * width * height );
-    *ptr_table = realloc((void*)ptr_table, sizeof(int) * width * height );
-    
+    score_table = realloc((void*)score_table, sizeof(int) * width * height );
+    ptr_table = realloc((void*)ptr_table, sizeof(int) * width * height );
+
     needleman_wunsch( args->a, args->b[i], args->a_l, args->b_l[i],
 		      args->gap_i, args->gap_e,
 		      args->sub_table, args->al_offset, args->al_size,
-		      score_table, ptr_table);
+		      args->tgaps_free, score_table, ptr_table);
     
     struct needle_wunsch_results *ret_data = &(args->ret_data[i]);
     ret_data->score = score_table[ width * height - 1 ];
     ret_data->al_stats = extract_nm_alignment(ptr_table, height, width, args->a, args->b[i],
 					      &(ret_data->al_a), &(ret_data->al_b));
-    
-    char_at( ret_data->al_a, args->special_char, &(ret_data->pos_a), &(ret_data->pos_a_l));
-    char_at( ret_data->al_b, args->special_char, &(ret_data->pos_b), &(ret_data->pos_b_l));
-    ret_data->pos_table = aligned_i( ret_data->pos_a, ret_data->pos_b, ret_data->pos_a_l, ret_data->pos_b_l,
+
+    char_at( ret_data->al_a, args->special_char, &(ret_data->a_pos), &(ret_data->a_pos_l));
+    char_at( ret_data->al_b, args->special_char, &(ret_data->b_pos), &(ret_data->b_pos_l));
+
+    ret_data->pos_table = aligned_i( ret_data->a_pos, ret_data->b_pos, ret_data->a_pos_l, ret_data->b_pos_l,
 				     &(ret_data->pos_table_nrow) );
+
   }
   free(score_table);
   free(ptr_table);
-  pthread_cond_signal( &cond );
   pthread_exit((void*)args_ptr);
 }
     
@@ -712,8 +710,11 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   if( TYPEOF(n_thread_r) != INTSXP || length(n_thread_r) != 1)
     error("n_thread_r should be an integer vector of length 1");
   if(length(al_offset_r) != 1 || length(al_size_r) != 1 || length(a_seq_r) != 1
-     || length(b_seq_r) < 1 || length(tgaps_free_r) != 1 || length(special_char_r) != 1 )
-    error("most arguments should have a length of one (b_seq_r may have more than one sequence)");
+     || length(b_seq_r) < 1 || length(tgaps_free_r) != 1 || length(special_char_r) != 1 ){
+    Rprintf("most arguments should have a length of one (b_seq_r may have more than one sequence): %d %d %d %d %d %d",
+	    length(al_offset_r), length(al_size_r), length(a_seq_r), length(b_seq_r), length(tgaps_free_r), length(special_char_r));
+    error("Giving up");
+  }
 
   int al_offset = asInteger(al_offset_r);
   int al_size = asInteger(al_size_r);
@@ -735,7 +736,7 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
 
   int *gap = INTEGER(gap_r);
   int n_thread = asInteger( n_thread_r );
-  if(n_thread <= 1)
+  if(n_thread < 1)
     error("n_thread must be larger than 0!");
   
   // We now need to set up vectors containing the appropriate b sequences
@@ -744,7 +745,7 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   const unsigned char **b_seq = malloc( sizeof(const char*) * b_n );
   for(int i=0; i < b_n; ++i){
     b_l[i] = length( STRING_ELT( b_seq_r, i ));
-    b_seq[i] = (const unsigned char*)CHAR( STRING_ELT( b_seq_r, 0 ));
+    b_seq[i] = (const unsigned char*)CHAR( STRING_ELT( b_seq_r, i ));
   }
   // reduce the thread number if we have fewer b_sequences than threads
   if( b_n < n_thread )
@@ -756,7 +757,7 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
 							   sub_table, al_offset, al_size, tgaps_free,
 							   special_char, &mutex);
 							   
-  pthread_t *threads = malloc( sizeof(pthread_t), n_thread );
+  pthread_t *threads = malloc( sizeof(pthread_t) * n_thread );
   for(int i=0; i < n_thread; ++i){
     pthread_create( &threads[i], NULL, needleman_wunsch_thread, (void*)&args );
   }
@@ -771,22 +772,22 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   SEXP ret_data = PROTECT( allocVector( VECSXP, b_n )); 
   for(int i=0; i < b_n; ++i){
     SET_VECTOR_ELT( ret_data, i, allocVector( VECSXP, 5 ));
-    SEXP rd = GET_VECTOR_ELT(ret_data, i);
+    SEXP rd = VECTOR_ELT(ret_data, i);
     SET_VECTOR_ELT( rd, 0, allocVector( INTSXP, 1 + sizeof( struct align_stats ) / sizeof(int) ));
     SET_VECTOR_ELT( rd, 1, allocVector( STRSXP, 2 ));  // the sequences
-    SET_VECTOR_ELT( rd, 2, allocVector( INTSXP, args->ret_data[i].a_pos_l ));
-    SET_VECTOR_ELT( rd, 3, allocVector( INTSXP, args->ret_data[i].b_pos_l ));
-    SET_VECTOR_ELT( rd, 4, allocMatrix( INTSXP, args->ret_data[i].pos_table_nrow, 2));
+    SET_VECTOR_ELT( rd, 2, allocVector( INTSXP, args.ret_data[i].a_pos_l ));
+    SET_VECTOR_ELT( rd, 3, allocVector( INTSXP, args.ret_data[i].b_pos_l ));
+    SET_VECTOR_ELT( rd, 4, allocMatrix( INTSXP, args.ret_data[i].pos_table_nrow, 2));
     // this is a bit dodgy, but trying to merge the score and the align_stats together
-    INTEGER(VECTOR_ELT(rd, 0))[0] = args->ret_data[i].score;
-    memcpy( (void*)(1 + INTEGER(VECTOR_ELT(rd, 0))), (void*)&(args->ret_data[i].al_stats), sizeof(struct align_stats) );
-    SET_STRING_ELT( VECTOR_ELT(rd, 1), 0, mkChar( args->ret_data[i].al_a ));
-    SET_STRING_ELT( VECTOR_ELT(rd, 1), 1, mkChar( args->ret_data[i].al_b ));
-    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 2)), args->ret_data[i].a_pos, sizeof(int) * args->ret_data[i].a_pos_l );
-    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 3)), args->ret_data[i].b_pos, sizeof(int) * args->ret_data[i].b_pos_l );
-    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 3)), args->ret_data[i].pos_table, sizeof(int) * 2 * args->ret_data[i].pos_table_nrow );
+    INTEGER(VECTOR_ELT(rd, 0))[0] = args.ret_data[i].score;
+    memcpy( (void*)(1 + INTEGER(VECTOR_ELT(rd, 0))), (void*)&(args.ret_data[i].al_stats), sizeof(struct align_stats) );
+    SET_STRING_ELT( VECTOR_ELT(rd, 1), 0, mkChar( args.ret_data[i].al_a ));
+    SET_STRING_ELT( VECTOR_ELT(rd, 1), 1, mkChar( args.ret_data[i].al_b ));
+    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 2)), args.ret_data[i].a_pos, sizeof(int) * args.ret_data[i].a_pos_l );
+    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 3)), args.ret_data[i].b_pos, sizeof(int) * args.ret_data[i].b_pos_l );
+    memcpy( (void*)INTEGER(VECTOR_ELT(rd, 4)), args.ret_data[i].pos_table, sizeof(int) * 2 * args.ret_data[i].pos_table_nrow );
   }
-  needle_wunsch_args_free( args );
+  needle_wunsch_args_free( &args );
   free(b_l);
   free(b_seq);
   UNPROTECT(1);
@@ -796,6 +797,7 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
+  {"align_seqs_mt", (DL_FUNC)&align_seqs_mt, 9},
   {NULL, NULL, 0}
 };
 

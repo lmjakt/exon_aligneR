@@ -250,29 +250,15 @@ for(i in 1:length(aligns)){
     sp1 <- names(exon.i)[ aligns[[i]]$i ]
     sp2 <- names(exon.i)[ aligns[[i]]$j ]
     plot.new()
-    plot.window(xlim=c(-1, nchar(aligns[[i]][[5]][1])), ylim=c(0, 5))
-    x2 <- 1:nchar(aligns[[i]][[5]][1])
-    x1 <- x2-1
-    al.a <- strsplit(aligns[[i]][[5]][1], '')[[1]]
-    al.b <- strsplit(aligns[[i]][[5]][2], '')[[1]]
-    rect( x1, 1, x2, 2, col=cols[al.a], border=NA )
-    rect( x1, 2.5, x2, 3.5, col=cols[al.b], border=NA )
-    mtext(paste(sp1, "vs", sp2, aligns[[i]]$score), cex=2)
-    inpt <- readline('next')
+    plot.window(xlim=c(-1, nchar(aligns[[i]]$seq[1])), ylim=c(0, 5))
+    draw.aligns(aligns[[i]], 3, 1, 1, cols, sp1, sp2)
+    print( aligns[[i]]$stats )
+    axis(1)
+    inpt <- readline('next: ')
+    if(inpt == 'q')
+        break
 }
 
-i <- 1
-plot.new()
-plot.window( xlim=c(-1, nchar(aligns[[i]]$seq[1])), ylim=c(0,5) )
-draw.aligns( aligns[[i]], 3, 1, 1, cols, sp.a=names(exon.i)[ aligns[[i]]$i ], sp.b=names(exon.i)[ aligns[[i]]$j ], sim.pos=c(1,1) )
-
-plot.new()
-plot.window( xlim=c(-1, nchar(aligns[[i]]$seq[1])), ylim=c(0,5) )
-draw.aligns( aligns[[i]], 3, 1, 1, cols, sp.a=names(exon.i)[ aligns[[i]]$i ], sp.b=names(exon.i)[ aligns[[i]]$j ], sim.pos=c(1,2) )
-
-plot.new()
-plot.window( xlim=c(-1, nchar(aligns[[i]]$seq[1])), ylim=c(0,5) )
-draw.aligns( aligns[[i]], 3, 1, 1, cols, sp.a=names(exon.i)[ aligns[[i]]$i ], sp.b=names(exon.i)[ aligns[[i]]$j ], sim.pos=c(2,1) )
 
 i <- which( sapply( 1:length(aligns), function(i){ aligns[[i]]$i }) == 1 )
 max.x <- max( sapply( aligns[i], function(x){ nchar(x$seq[1]) }) )
@@ -303,3 +289,43 @@ for(sp.i in 1:length(exon.i)){
     }
     inpt <- readline("next: ")
 }
+
+
+## let us test the mulithreaded version
+dyn.load("src/exon_aligneR.so")
+source('functions.R')
+
+##for(i in 1:100){
+system.time(
+    tmp <- align.seqs.mt( exon.i[1], exon.i[1:length(exon.i[1:5])], al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=1)
+)
+##}
+
+## 0.198 for 16 alignments
+## 0.012 / alignment. Similar to before. But:
+## segfault! The second time I run this...   yeah... 
+
+## but let us check if they look correct or not...
+for(i in 1:length(tmp)){
+    plot.new()
+    sp1 <- names(tmp)[1]
+    sp2 <- names(tmp)[i]
+    plot.window(xlim=c(-1, nchar(tmp[[i]]$seq[1])), ylim=c(0, 5))
+    draw.aligns(tmp[[i]], 3, 1, 1, cols, sp1, sp2)
+    axis(1)
+    print( tmp[[i]]$stats )
+    ## x2 <- 1:nchar(tmp[[i]][[5]][1])
+    ## x1 <- x2-1
+    ## al.a <- strsplit(tmp[[i]][[5]][1], '')[[1]]
+    ## al.b <- strsplit(tmp[[i]][[5]][2], '')[[1]]
+    ## rect( x1, 1, x2, 2, col=cols[al.a], border=NA )
+    ## rect( x1, 2.5, x2, 3.5, col=cols[al.b], border=NA )
+    ## mtext(paste(sp1, "vs", sp2, tmp [[i]]$score), cex=2)
+    ## axis(1)
+    inpt <- readline('next: ')
+    if(inpt == 'q')
+        break
+}
+
+

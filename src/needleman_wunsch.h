@@ -28,7 +28,7 @@ void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, 
 		       int tgaps_free,
 		       int *score_table, int *ptr_table);
 
-struct align_stats extract_nm_alignment(int* pointers, int height, int width, const char *a, const char *b,
+struct align_stats extract_nm_alignment(int* pointers, int height, int width, const unsigned char *a, const unsigned char *b,
 			  char **a_a, char **b_a);
 
 void char_at(const char *word, char c, int **pos, int *pos_l);

@@ -295,37 +295,71 @@ for(sp.i in 1:length(exon.i)){
 dyn.load("src/exon_aligneR.so")
 source('functions.R')
 
-##for(i in 1:100){
 system.time(
-    tmp <- align.seqs.mt( exon.i[1], exon.i[1:length(exon.i[1:5])], al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
-                         tgaps.free=TRUE, sp.char="I", thread.n=1)
+    aligns.2 <- align.seqs.mt( exon.i[1], exon.i[2:length(exon.i)], al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=6)
 )
-##}
+## 0.053 seconds
 
-## 0.198 for 16 alignments
-## 0.012 / alignment. Similar to before. But:
-## segfault! The second time I run this...   yeah... 
-
-## but let us check if they look correct or not...
-for(i in 1:length(tmp)){
+## to confirm that we get the correct data set..
+par(mfrow=c(2,1))
+for(i in 1:length(aligns.2)){
     plot.new()
-    sp1 <- names(tmp)[1]
-    sp2 <- names(tmp)[i]
-    plot.window(xlim=c(-1, nchar(tmp[[i]]$seq[1])), ylim=c(0, 5))
-    draw.aligns(tmp[[i]], 3, 1, 1, cols, sp1, sp2)
+    sp1 <- names(aligns.2)[1]
+    sp2 <- names(aligns.2)[i+1]
+    plot.window(xlim=c(-1, nchar(aligns.2[[i]]$seq[1])), ylim=c(0, 5))
+    draw.aligns(aligns.2[[i]], 3, 1, 1, cols, sp1, sp2)
     axis(1)
-    print( tmp[[i]]$stats )
-    ## x2 <- 1:nchar(tmp[[i]][[5]][1])
-    ## x1 <- x2-1
-    ## al.a <- strsplit(tmp[[i]][[5]][1], '')[[1]]
-    ## al.b <- strsplit(tmp[[i]][[5]][2], '')[[1]]
-    ## rect( x1, 1, x2, 2, col=cols[al.a], border=NA )
-    ## rect( x1, 2.5, x2, 3.5, col=cols[al.b], border=NA )
-    ## mtext(paste(sp1, "vs", sp2, tmp [[i]]$score), cex=2)
-    ## axis(1)
+    print( aligns.2[[i]]$stats )
+    plot.new()
+    plot.window(xlim=c(-1, nchar(aligns[[i]]$seq[1])), ylim=c(0, 5))
+    draw.aligns(aligns[[i]], 3, 1, 1, cols, sp1, sp2)
+    print( aligns[[i]]$stats )
+    axis(1)
     inpt <- readline('next: ')
     if(inpt == 'q')
         break
 }
 
 
+
+## it seems that this works. Let us see how threaded it is..
+## I have 6 cores and 12 threads on this machine. Let's see how it works with this
+t.perf <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], exon.i[2:length(exon.i)], al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+plot(1:ncol(t.perf), t.perf['elapsed',], type='b')
+plot(1:ncol(t.perf), t.perf['elapsed',1] / t.perf['elapsed',], type='b')
+abline(0,1, lty=2, col='red')
+plot(1:ncol(t.perf), 1:ncol(t.perf) * t.perf['elapsed',] / t.perf['elapsed',1], type='b')
+
+
+## lets make a bigger set of sequences to do this against and see if we get a better
+## throughput...
+b.seq <- rep(exon.i, 10)
+
+t.perf.2 <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+
+plot(1:ncol(t.perf.2), t.perf.2['elapsed',], type='b')
+plot(1:ncol(t.perf.2), t.perf.2['elapsed',1] / t.perf.2['elapsed',], type='b')
+abline(0,1, lty=2, col='red')
+plot(1:ncol(t.perf.2), 1:ncol(t.perf.2) * t.perf.2['elapsed',] / t.perf.2['elapsed',1], type='b')
+
+## that does give us rather better scaling. Up to a maximum of 5x speedup on 6 cores.
+## Which in essence means that I can do this later on..
+
+par(mfrow=c(1,2))
+plot(1:ncol(t.perf), t.perf['elapsed',1] / t.perf['elapsed',], type='b', xlab='threads', ylab='relative performance')
+abline(0,1,col='red', lty=2)
+plot(1:ncol(t.perf.2), t.perf.2['elapsed',1] / t.perf.2['elapsed',], type='b', xlab='threads', ylab='relative performance')
+abline(0,1,col='red', lty=2)

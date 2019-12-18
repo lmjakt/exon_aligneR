@@ -18,6 +18,9 @@ struct align_stats {
   int b_gap_r;    // terminal gaps
   int match_n;
   int mismatch_n;
+  int transition;
+  int transversion;
+  int A, C, G, T;  // individual counts..
 };
 
 struct align_stats align_stats_init();
@@ -33,6 +36,13 @@ struct align_stats extract_nm_alignment(int* pointers, int height, int width, co
 
 void char_at(const char *word, char c, int **pos, int *pos_l);
 int *aligned_i(int *pos1, int *pos2, int l1, int l2, int *nrow);
+
+// do we have a transition or a transversion.
+// -1 => transition
+//  0 => unknown
+// +1 = transversion
+// a and b must be in A,C,G,T to give non-0 result
+int mut_type(char a, char b, int *A, int *C, int *G, int *T);
 
 
 #endif

@@ -37,7 +37,6 @@
 //
 // Conceptually this could be used for other purposes as well.
 
-
 int which_max_i(int *v, int l){
   int max_i = 0;
   double max = v[0];
@@ -106,6 +105,12 @@ struct align_stats align_stats_init(){
   as.b_gap_r = 0;
   as.match_n = 0;
   as.mismatch_n = 0;
+  as.transition = 0;
+  as.transversion = 0;
+  as.A = 0;
+  as.C = 0;
+  as.G = 0;
+  as.T = 0;
   // better or worse as:
   //  memset( (void*)&as, 0, sizeof(as) );
   return(as);
@@ -217,10 +222,14 @@ struct align_stats extract_nm_alignment(int *pointers, int height, int width, co
       stats.b_gap_l += (column == 0) ? 1 : 0;
       stats.b_gap_r += (column == width - 1) ? 1 : 0;
     }
-    if( ac == bc )
+    int m_type = mut_type(ac, bc, &stats.A, &stats.C, &stats.G, &stats.T);
+    if( ac == bc ){
       stats.match_n++;
-    else
+    }else{
       stats.mismatch_n += (ac == '-' || bc == '-') ? 0 : 1;
+      stats.transition += (m_type == -1) ? 1 : 0;
+      stats.transversion += (m_type == 1) ? 1 : 0;
+    }
     // and.. 
     last_a = ac;
     last_b = bc;
@@ -289,4 +298,114 @@ int *aligned_i(int *pos1, int* pos2, int l1, int l2, int *nrow){
   }
   return(i_table);
 }
- 
+
+enum nuc_combination {
+  AA = ('A' << 8) | 'A',
+  AC = ('A' << 8) | 'C',
+  AG = ('A' << 8) | 'G',
+  AT = ('A' << 8) | 'T',
+
+  CA = ('C' << 8) | 'A',
+  CC = ('C' << 8) | 'C',
+  CG = ('C' << 8) | 'G',
+  CT = ('C' << 8) | 'T',
+
+  GA = ('G' << 8) | 'A',
+  GC = ('G' << 8) | 'C',
+  GG = ('G' << 8) | 'G',
+  GT = ('G' << 8) | 'T',
+
+  TA = ('T' << 8) | 'A',
+  TC = ('T' << 8) | 'C',
+  TG = ('T' << 8) | 'G',
+  TT = ('T' << 8) | 'T',
+};
+
+
+// this is a bit ugly, but should be fast as it will make use of
+// single flat switch statement.
+int mut_type(char a, char b, int *A, int *C, int *G, int *T){
+  int mask = ~0x20;  // implements toupper.
+  int n_combo = ((a & mask) << 8) | (b & mask);
+  int m_type = 0;
+  switch(n_combo){
+  case AA:
+    (*A) += 2;
+    break;
+  case AC:
+    (*A)++;
+    (*C)++;
+    m_type = 1;
+    break;
+  case AG:
+    m_type = -1;
+    (*A)++;
+    (*G)++;
+    break;
+  case AT:
+    (*A)++;
+    (*T)++;
+    m_type = 1;
+    break;
+
+  case CA:
+    (*C)++;
+    (*A)++;
+    m_type = 1;
+    break;
+  case CC:
+    (*C) += 2;
+    break;
+  case CG:
+    (*C)++;
+    (*G)++;
+    m_type = 1;
+    break;
+  case CT:
+    (*C)++;
+    (*T)++;
+    m_type = -1;
+    break;
+
+  case GA:
+    (*G)++;
+    (*A)++;
+    m_type = -1;
+    break;
+  case GC:
+    (*G)++;
+    (*C)++;
+    m_type = 1;
+    break;
+  case GG:
+    (*G) += 2;
+    break;
+  case GT:
+    (*G)++;
+    (*T)++;
+    m_type = 1;
+    break;
+
+  case TA:
+    (*T)++;
+    (*A)++;
+    m_type = 1;
+    break;
+  case TC:
+    (*T)++;
+    (*C)++;
+    m_type = -1;
+    break;
+  case TG:
+    (*T)++;
+    (*G)++;
+    m_type = 1;
+    break;
+  case TT:
+    (*T) += 2;
+    break;
+  default:
+    m_type = 0;
+  }
+  return(m_type);
+}

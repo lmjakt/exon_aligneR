@@ -194,6 +194,14 @@ exon.i <- sapply( exons, function(x){
 
 names(exon.i) <- sub("([^_]+)_([^_]+)_.+$", "\\1 \\2", exon.dbs )
 
+## lets reorder by rough phylogeny..
+exon.i <- exon.i[ c('tetraodon nigroviridis', 'takifugu rubripes', 'electrophorus electricus', 'mastacembelus armatus',
+                    'oryzias latipes', 'amphilophus citrinellus', 'neolamprologus brichardi',
+                    'poecilia formosa', 'oreochromis niloticus', 'danio rerio',
+                    'lepisosteus oculatus', 'callorhinchus milii',
+                    'anolis carolinensis', 'gallus gallus', 'ursus americanus', 'mus musculus',
+                    'homo sapiens')]
+
 ## allow from ! to `
 ##
 al.size <- as.integer(1 + 96 - 33)
@@ -245,6 +253,83 @@ for(i in 1:(l-1)){
 ##        aligns[[k]] <- c('i'=i, 'j'=j, .Call("align_seqs", exon.i[i], exon.i[j], al.offset, al.size, sub.matrix, as.integer(c(-10, -1)), TRUE, "I" ) )
     }
 }
+
+## try the stats function..
+tmp <- .Call("nucl_align_stats", aligns[[1]]$seq)
+tmp <- align.seqs.stats( aligns[[1]]$seq )
+
+aligns.stats <- t(sapply( aligns, function(x){ align.seqs.stats( x$seq )}))
+
+## we can then get the distances from these
+align.stats.jc <- apply( aligns.stats, 1, jukes.cantor )
+align.stats.k2 <- apply( aligns.stats, 1, kimura.two  )
+align.stats.jcg <- apply( aligns.stats, 1, jukes.cantor.indel  )
+
+## we can make a little matrix out of that..
+jc.m <- matrix(0, nrow=length(exon.i), ncol=length(exon.i))
+score.m <- jc.m
+k2.m <- jc.m
+jcg.m <- jc.m
+for(i in 1:length(aligns)){
+    jc.m[ aligns[[i]]$i, aligns[[i]]$j ] <- align.stats.jc[i]
+    jc.m[ aligns[[i]]$j, aligns[[i]]$i ] <- align.stats.jc[i]
+    ##
+    k2.m[ aligns[[i]]$i, aligns[[i]]$j ] <- align.stats.k2[i]
+    k2.m[ aligns[[i]]$j, aligns[[i]]$i ] <- align.stats.k2[i]
+    ##
+    jcg.m[ aligns[[i]]$i, aligns[[i]]$j ] <- align.stats.jcg[i]
+    jcg.m[ aligns[[i]]$j, aligns[[i]]$i ] <- align.stats.jcg[i]
+    score.m[ aligns[[i]]$i, aligns[[i]]$j ] <- aligns[[i]]$score
+}
+
+par(mar=c(10.1, 10.1, 4.1, 2.1))
+image(1:length(exon.i), 1:length(exon.i), jc.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='distance')
+axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+axis(2, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+image(1:length(exon.i), 1:length(exon.i), score.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='score' )
+axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+axis(2, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+
+
+par(mar=c(10.1, 10.1, 4.1, 2.1))
+image(1:length(exon.i), 1:length(exon.i), jcg.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='distance')
+axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+axis(2, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+image(1:length(exon.i), 1:length(exon.i), score.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='score' )
+axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+axis(2, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+
+par(mar=c(10.1, 10.1, 4.1, 2.1))
+image(1:length(exon.i), 1:length(exon.i), k2.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='distance')
+axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+axis(2, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+image(1:length(exon.i), 1:length(exon.i), score.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='score' )
+axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+axis(2, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
+
+## do we get a reasonable tree from these distances ?
+require('ape')
+
+dimnames(jc.m) <- list( names(exon.i), names(exon.i) )
+dimnames(jcg.m) <- list( names(exon.i), names(exon.i) )
+dimnames(k2.m) <- list( names(exon.i), names(exon.i) )
+
+jc.nj <- nj(jc.m)
+jcg.nj <- nj(jcg.m)
+k2.nj <- nj(k2.m)
+
+par(mar=c(5.1, 4.1, 4.1, 2.1))
+par(mfrow=c(1,3))
+plot( root(jc.nj, outgroup='callorhinchus milii'), cex=1.25)
+plot( root(jcg.nj, outgroup='callorhinchus milii'), cex=1.25)
+plot( root(k2.nj, outgroup='callorhinchus milii'), cex=1.25)
+
+par(mar=c(5.1, 4.1, 4.1, 2.1))
+par(mfrow=c(1,3))
+plot( root(jc.nj, outgroup='callorhinchus milii'), cex=1.25, 'radial')
+plot( root(jcg.nj, outgroup='callorhinchus milii'), cex=1.25, 'radial')
+plot( root(k2.nj, outgroup='callorhinchus milii'), cex=1.25, 'radial')
+
 
 for(i in 1:length(aligns)){
     sp1 <- names(exon.i)[ aligns[[i]]$i ]

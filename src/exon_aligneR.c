@@ -572,6 +572,114 @@ SEXP align_seqs(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   return( ret_data);
 }
 
+// A utility function to return some alignment statistics
+// seq_r should hold at least two sequences. The two first sequences will be
+// considered as aligned. These should be of the same length;
+SEXP nucl_align_stats(SEXP seq_r){
+  if(TYPEOF(seq_r) != STRSXP || length(seq_r) < 2)
+    error("seq_r should be a character vector of length 2 or more");
+  SEXP seq_a_r = STRING_ELT( seq_r, 0 );
+  SEXP seq_b_r = STRING_ELT( seq_r, 1 );
+  if(length(seq_a_r) != length(seq_b_r) || length(seq_a_r) == 0)
+    error("sequences must be of the same non-0 length");
+  int l_a = length(seq_a_r);
+  const char *seq_a = CHAR(seq_a_r);
+  const char *seq_b = CHAR(seq_b_r);
+
+  // We will count:
+  // 1. Total number of identical residues
+  // 2. Total number of transitions (A <-> G, C <-> T)
+  // 3. Total number of tranversions (A <-> C, A <-> T, C <-> G, G <-> T)
+  // 4. Total number of gaps
+  // 5. Total number of gap insertions
+  // 6. Number of left terminal gaps
+  // 7. Number of right terminal gaps
+  //
+  // These are pretty much the same stats as returned by the neew multithreaded
+  // function excpet for the fact that that does not consider transitions and
+  // transversions separately.
+
+  // We will use a switch statement for each position, and we will convert to upper case
+  // by use of
+  // ~0x20 & c
+  // (that is (NOT 0x20) AND c
+  // where c is the character in that position...
+  //
+  // That unfortunately turns the gap character: -  0x2D
+  // into 0xD which is carriage return..
+
+  int gap_a = 0;
+  int gap_b = 0;
+  int gap_a_begin = 0;
+  int gap_b_begin = 0;
+  int left_terminal_gap = 0;
+  int right_terminal_gap = 0;
+  int total_gaps = 0;
+  int gap_insertions = 0;
+  int id_n = 0;
+  int transition = 0;
+  int transversion = 0;
+  int A_n=0, C_n=0, G_n=0, T_n=0;
+  int mask = ~0x20;
+  int gap = '-' & mask;
+  
+  for(int i=0; i < l_a; ++i){
+    char a = seq_a[i] & mask;
+    char b = seq_b[i] & mask;
+
+    if(a == gap){
+      gap_insertions += (gap_a) ? 0 : 1;
+      gap_a_begin = (gap_a) ? gap_a_begin : i;
+      left_terminal_gap += (gap_a_begin == 0) ? 1 : 0;
+      gap_a++;
+      total_gaps++;
+      continue;
+    }else{
+      gap_a = 0;
+    }
+    
+    if(b == gap){
+      gap_insertions += (gap_b) ? 0 : 1;
+      gap_b_begin = (gap_b) ? gap_b_begin : i;
+      left_terminal_gap += (gap_b_begin == 0) ? 1 : 0;
+      gap_b++;
+      total_gaps++;
+      continue;
+    }else{
+      gap_b = 0;
+    }
+
+    int m_type = mut_type( a, b, &A_n, &C_n, &G_n, &T_n );
+    
+    if( a == b ){
+      id_n++;
+      continue;
+    }
+    transition += (m_type == -1) ? 1 : 0;
+    transversion += (m_type == 1) ? 1 : 0;
+  }
+  // here we should be able to set the right_terminal_gap
+  right_terminal_gap = (gap_a > gap_b) ? gap_a : gap_b;
+  // and then we assign these values to simple numeric vector..
+  // This should really be done above everything else, then using
+  // pointers, but it isn't that important.
+  SEXP ret_data_r = PROTECT(allocVector(INTSXP, 11));
+  int *ret_data = INTEGER(ret_data_r);
+  ret_data[0] = left_terminal_gap;
+  ret_data[1] = right_terminal_gap;
+  ret_data[2] = total_gaps;
+  ret_data[3] = gap_insertions;
+  ret_data[4] = id_n;
+  ret_data[5] = transition;
+  ret_data[6] = transversion;
+  ret_data[7] = A_n;
+  ret_data[8] = C_n;
+  ret_data[9] = G_n;
+  ret_data[10] = T_n;
+  UNPROTECT(1);
+  return(ret_data_r);
+}
+
 // To make a mulithreaded version I need to first define a struct that takes the arguments
 // that need to be passed to needlmean_wunsch and extract_nm_alignment
 // Note that since this is for high-throughput alignments we do not return the scoring matrices
@@ -798,6 +906,7 @@ static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
   {"align_seqs_mt", (DL_FUNC)&align_seqs_mt, 9},
+  {"nucl_align_stats", (DL_FUNC)&nucl_align_stats, 1},
   {NULL, NULL, 0}
 };
 

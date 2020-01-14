@@ -260,6 +260,7 @@ tmp <- align.seqs.stats( aligns[[1]]$seq )
 
 aligns.stats <- t(sapply( aligns, function(x){ align.seqs.stats( x$seq )}))
 
+
 ## we can then get the distances from these
 align.stats.jc <- apply( aligns.stats, 1, jukes.cantor )
 align.stats.k2 <- apply( aligns.stats, 1, kimura.two  )
@@ -282,6 +283,7 @@ for(i in 1:length(aligns)){
     score.m[ aligns[[i]]$i, aligns[[i]]$j ] <- aligns[[i]]$score
 }
 
+par(mfrow=c(1,2))
 par(mar=c(10.1, 10.1, 4.1, 2.1))
 image(1:length(exon.i), 1:length(exon.i), jc.m, col=hsvScale(1:255, sat=1:255/255 ), axes=FALSE, xlab=NA, ylab=NA, main='distance')
 axis(1, at=1:length(exon.i), labels=names(exon.i), las=2, cex.axis=0.8)
@@ -386,6 +388,8 @@ system.time(
 )
 ## 0.053 seconds
 
+aligns.2.stats <- t( sapply(aligns.2, align.mt.to.stats) )
+
 ## to confirm that we get the correct data set..
 par(mfrow=c(2,1))
 for(i in 1:length(aligns.2)){
@@ -410,6 +414,7 @@ for(i in 1:length(aligns.2)){
 
 ## it seems that this works. Let us see how threaded it is..
 ## I have 6 cores and 12 threads on this machine. Let's see how it works with this
+### This is with default compilation parameters
 t.perf <- sapply(1:12, function(t){
     system.time(
         tmp <- align.seqs.mt( exon.i[1], exon.i[2:length(exon.i)], al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
@@ -421,6 +426,8 @@ plot(1:ncol(t.perf), t.perf['elapsed',], type='b')
 plot(1:ncol(t.perf), t.perf['elapsed',1] / t.perf['elapsed',], type='b')
 abline(0,1, lty=2, col='red')
 plot(1:ncol(t.perf), 1:ncol(t.perf) * t.perf['elapsed',] / t.perf['elapsed',1], type='b')
+
+
 
 
 ## lets make a bigger set of sequences to do this against and see if we get a better
@@ -448,3 +455,83 @@ plot(1:ncol(t.perf), t.perf['elapsed',1] / t.perf['elapsed',], type='b', xlab='t
 abline(0,1,col='red', lty=2)
 plot(1:ncol(t.perf.2), t.perf.2['elapsed',1] / t.perf.2['elapsed',], type='b', xlab='threads', ylab='relative performance')
 abline(0,1,col='red', lty=2)
+
+## after compiling with
+## MAKEFLAGS="CFLAGS=-03" R CMD SHLIB exon_aligneR.c needleman_wunsch.c
+dyn.load("src/exon_aligneR.so")
+t.perf.2.03 <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.2['elapsed',] / t.perf.2.03['elapsed',]
+
+## that makes no differece whatsoever..
+## with which_i_max defined as static inline
+dyn.load("src/exon_aligneR.so")
+t.perf.2.o3.i <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.2.o3.i['elapsed',] / t.perf.2['elapsed',]
+## this makes a marginal difference.. takes 10% less time.
+## [1] 0.9490085 0.9883041 0.9140625 0.9385666 0.9268293 0.8914027 0.9323671
+## [8] 0.9086538 0.9064039 0.8632075 0.8838384 0.8871795
+
+## what abot with O4 ?
+dyn.load("src/exon_aligneR.so")
+t.perf.2.o4.i <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.2.o4.i['elapsed',] / t.perf.2['elapsed',]
+## [1] 0.8866856 1.0097466 0.9348958 0.9419795 0.9268293 0.8959276 0.9420290
+## [8] 0.8942308 0.9162562 0.8443396 0.8939394 0.8769231
+
+## again, this makes no real difference in performance.. 
+
+## declare some variables outside of the looping.. 
+dyn.load("src/exon_aligneR.so")
+t.perf.3.o4.i <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.3.o4.i['elapsed',] / t.perf.2['elapsed',]
+
+## as expected that makes bugger all difference. The compiler is smart enough for
+## that not to make any difference.
+
+## revert to local declaration
+dyn.load("src/exon_aligneR.so")
+t.perf.4.o4.i <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.4.o4.i['elapsed',] / t.perf.2['elapsed',]
+## and back to where we started.. With 6 threads we take 11% less time
+
+## remove the use of which_max_i by having a couple of local conditions..
+dyn.load("src/exon_aligneR.so")
+t.perf.5.o4 <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.5.o4['elapsed',] / t.perf.2['elapsed',]
+## OK, that is faster by about 15 to 20%. 4 days instead of 5.. 

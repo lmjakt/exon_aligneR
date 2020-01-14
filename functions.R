@@ -134,8 +134,13 @@ align.mt.to.stats <- function( al ){
 
 ## combine a list of stats to a single stat. Simple summing
 merge.stats <- function( stats ){
-    ss <- stats[[1]]
-    for(i in 2:length(stats)){
+    ss <- NULL
+    b <- 1
+    while(is.null(ss)){
+        ss <- stats[[b]]
+        b <- b + 1
+    }
+    for(i in b:length(stats)){
         ss <- ss + stats[[2]]
     }
     ss

@@ -37,17 +37,17 @@
 //
 // Conceptually this could be used for other purposes as well.
 
-int which_max_i(int *v, int l){
-  int max_i = 0;
-  double max = v[0];
-  for(int i=1; i < l; i++){
-    if(v[i] > max){
-      max = v[i];
-      max_i = i;
-    }
-  }
-  return(max_i);
-}
+/* int which_max_i(int *v, int l){ */
+/*   int max_i = 0; */
+/*   double max = v[0]; */
+/*   for(int i=1; i < l; i++){ */
+/*     if(v[i] > max){ */
+/*       max = v[i]; */
+/*       max_i = i; */
+/*     } */
+/*   } */
+/*   return(max_i); */
+/* } */
 
 int which_max_d(double *v, int l){
   int max_i = 0;
@@ -67,9 +67,11 @@ int m_offset(int row, int column, int height){
   return( column * height + row );
 }
 
+// Does not init whole table
 void init_scores( int *scores, int height, int width, char gap_i, char gap_e, char tgaps_free ){
   //  Rprintf("init scores dims: %d, $d\n", height, width );
   memset( (void*)scores, 0, sizeof(int) * height * width );
+  scores[0] = 0;
   if( width >= height || !(tgaps_free) ){
     scores[1] = gap_i;
     for(int i=2; i < height; ++i)
@@ -82,8 +84,10 @@ void init_scores( int *scores, int height, int width, char gap_i, char gap_e, ch
   }
 }
 
+// Does not init the whole table
 void init_ptr( int *ptr, int height, int width, const int left, const int up ){
   memset( (void*)ptr, 0, sizeof(int) * height * width );
+  ptr[0] = 0;
   //  Rprintf("init pointers dims: %d, $d\n", height, width );
   for(int i=1; i < height; ++i)
     ptr[i] = up;
@@ -128,46 +132,49 @@ void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, 
   int width = b_l + 1;
   const int left = 1;
   const int up = 2;
-  /* Rprintf("length of a: %d or %d\n", a_l, strlen((const char*)a)); */
-  /* Rprintf("length of b: %d or %d\n", b_l, strlen((const char*)b)); */
-  //  Rprintf("Calling init_scores %p  %d, %d   %d, %d\n", score_table, height, width, gap_i, gap_e);
+
   init_scores( score_table, height, width, gap_i, gap_e, tgaps_free );
-  //  Rprintf("Calling int_ptr\n");
   init_ptr( ptr_table, height, width, left, up );
   
   // whether we allow terminal gaps at the beginning or not.
   int a_tgap_free = tgaps_free && a_l > b_l;
   int b_tgap_free = tgaps_free && b_l > a_l;
 
-  //  Rprintf("a_tgap_free: %d b_tgap_free: %d\n", a_tgap_free, b_tgap_free);
-  
   for(int row=1; row < height; ++row){
-    //    Rprintf("\nrow: %d\n", row);
     for(int column=1; column < width; ++column){
       int o = column * height + row;
       int o_up = o - 1;
       int o_left = o - height;
       int o_diag = o - (height + 1);
       int m_score_o = (a[row-1] - al_offset) + (b[column-1] - al_offset) * al_size;
-      //      Rprintf("\t%c:%c %d, %d", a[row-1], b[column-1],  m_score_o, sub_table[ m_score_o ]);
-      char m_score = sub_table[ m_score_o ];
+      int m_score = sub_table[ m_score_o ];
       
-      char left_penalty = (b_tgap_free && row == a_l) ? 0 : (ptr_table[o_left] == left ? gap_e : gap_i);
-      char up_penalty = (a_tgap_free && column == b_l) ? 0 : (ptr_table[o_up] == up ? gap_e : gap_i);
+      int left_penalty = (b_tgap_free && row == a_l) ? 0 : (ptr_table[o_left] == left ? gap_e : gap_i);
+      int up_penalty = (a_tgap_free && column == b_l) ? 0 : (ptr_table[o_up] == up ? gap_e : gap_i);
       
-      int scores[3];
-      // scores are, left, up, diagonal
-      scores[0] = score_table[o_left] + left_penalty;
-      scores[1] = score_table[o_up] + up_penalty;
-      scores[2] = score_table[o_diag] + m_score;
-      int max_i = which_max_i( scores, 3 );
-      score_table[o] = scores[ max_i ];
-      ptr_table[o] = max_i + 1;
+      /* int scores[3]; */
+      /* // scores are, left, up, diagonal */
+      /* scores[0] = score_table[o_left] + left_penalty; */
+      /* scores[1] = score_table[o_up] + up_penalty; */
+      /* scores[2] = score_table[o_diag] + m_score; */
+      /* int max_i = which_max_i( scores, 3 ); */
+      /* score_table[o] = scores[ max_i ]; */
+      /* ptr_table[o] = max_i + 1; */
+
+      // This is marginally faster. Up to 20%.
+      score_table[o] = score_table[o_left] + left_penalty;
+      ptr_table[o] = 1;
+      if( score_table[o_up] + up_penalty > score_table[o] ){
+	score_table[o] = score_table[o_up] + up_penalty;
+	ptr_table[o] = 2;
+      }
+      if( score_table[o_diag] + m_score > score_table[o] ){
+	score_table[o] = score_table[o_diag] + m_score;
+	ptr_table[o] = 3;
+      }
+      
     }
   }
-  //  Rprintf("\nGot to the bottom of that\n");
-  // and that should basically be it.. apart from the initiation functions.
-  
 }
 
 struct align_stats extract_nm_alignment(int *pointers, int height, int width, const unsigned char *a, const unsigned char *b,

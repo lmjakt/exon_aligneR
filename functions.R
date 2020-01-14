@@ -141,7 +141,8 @@ merge.stats <- function( stats ){
         b <- b + 1
     }
     for(i in b:length(stats)){
-        ss <- ss + stats[[2]]
+        if(!is.null(stats[[i]]))
+            ss <- ss + stats[[i]]
     }
     ss
 }

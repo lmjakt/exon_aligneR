@@ -152,16 +152,7 @@ void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, 
       int left_penalty = (b_tgap_free && row == a_l) ? 0 : (ptr_table[o_left] == left ? gap_e : gap_i);
       int up_penalty = (a_tgap_free && column == b_l) ? 0 : (ptr_table[o_up] == up ? gap_e : gap_i);
       
-      /* int scores[3]; */
-      /* // scores are, left, up, diagonal */
-      /* scores[0] = score_table[o_left] + left_penalty; */
-      /* scores[1] = score_table[o_up] + up_penalty; */
-      /* scores[2] = score_table[o_diag] + m_score; */
-      /* int max_i = which_max_i( scores, 3 ); */
-      /* score_table[o] = scores[ max_i ]; */
-      /* ptr_table[o] = max_i + 1; */
-
-      // This is marginally faster. Up to 20%.
+      // This is marginally faster than defining an array of value. Up to 20%.
       score_table[o] = score_table[o_left] + left_penalty;
       ptr_table[o] = 1;
       if( score_table[o_up] + up_penalty > score_table[o] ){
@@ -415,4 +406,64 @@ int mut_type(char a, char b, int *A, int *C, int *G, int *T){
     m_type = 0;
   }
   return(m_type);
+}
+
+// these functions have too many arguments. It would be better to define suitable structs
+// and quite possibly return them.
+void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, int b_l,
+		     int gap_i, int gap_e,
+		     int *sub_table, int al_offset, int al_size,
+		     int *score_table, int *ptr_table,
+		     int *max_score, int *max_row, int *max_column)
+{
+  int height = a_l + 1;
+  int width = b_l + 1;
+  const int left = 1;
+  const int up = 2;
+  const int diag = 3;
+
+  // for a smith waterman the initial score table is all 0s as we can start
+  // an alignment from anywhere. 
+  memset( (void*)score_table, 0, sizeof(int) * height * width );
+  memset( (void*)ptr_table, 0, sizeof(int) * height * width );
+
+  *max_score = 0;
+  *max_row = 0;
+  *max_column = 0;
+  
+  for(int row=1; row < height; ++row){
+    for(int column=1; column < width; ++column){
+      int o = column * height + row;
+      int o_up = o - 1;
+      int o_left = o - height;
+      int o_diag = o - (height + 1);
+      int m_score_o = (a[row-1] - al_offset) + (b[column-1] - al_offset) * al_size;
+
+      int left_score = score_table[o_left] + (ptr_table[o_left] == left) ? gap_e : gap_i;
+      int up_score = score_table[o_up] + (ptr_table[o_up] == up);
+      int diag_score = score_table[o_diag] + sub_table[ m_score_o ];
+
+      // we could probably do this by directly calculating the alternative scores
+      // rather than
+      if(left_score > score_table[o]){
+	score_table[o] = left_score;
+	ptr_table[o] = left;
+      }
+      if(up_score > score_table[o]){
+	score_table[o] = up_score;
+	ptr_table[o] = up;
+      }
+      if(diag_score > score_table[o]){
+	score_table[o] = diag_score;
+	ptr_table[o] = diag;
+      }
+      if(score_table[o] > *max_score){
+	*max_score = score_table[o];
+	*max_row = row;
+	*max_column = column;
+      }
+    }
+  }
+  
+
 }

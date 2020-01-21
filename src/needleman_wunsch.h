@@ -57,5 +57,18 @@ int *aligned_i(int *pos1, int *pos2, int l1, int l2, int *nrow);
 // a and b must be in A,C,G,T to give non-0 result
 int mut_type(char a, char b, int *A, int *C, int *G, int *T);
 
+// Functions for local alignment. We should either rename this file to
+// something like, dynamic_alignment.h, or create a separate
+// header file for smith_waterman, and a header for common data structures
+// But one step at a time..
+
+// smith_waterman should probably return something that tells us the location
+// of the maximall scoring cell; but let us not care too much
+
+void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, int b_l,
+		     int gap_i, int gap_e,
+		     int *sub_table, int al_offset, int al_size,
+		     int *score_table, int *ptr_table,
+		     int *max_score, int *max_row, int *max_column);
 
 #endif

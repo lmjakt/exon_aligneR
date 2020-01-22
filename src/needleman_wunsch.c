@@ -597,4 +597,32 @@ void count_sw_alignments( struct sw_alignment *align, int *n)
   count_sw_alignments( align->bottom_right, n );
 }
 
+void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
+			int **cigar_ops, int **cigar_n, int *cigar_lengths,
+			int *i, int aligns_n ){
+  if(!align || *i >= aligns_n)
+    return;
+
+  // copy the data to the i th position;
+  // presumably this could be done with a memcpy. 
+  align_table[ (*i) + aligns_n * 0] = align->row_begin;
+  align_table[ (*i) + aligns_n * 1] = align->row_end;
+  align_table[ (*i) + aligns_n * 2] = align->col_begin;
+  align_table[ (*i) + aligns_n * 3] = align->col_end;
+  align_table[ (*i) + aligns_n * 4] = align->score;
+  align_table[ (*i) + aligns_n * 5] = align->al_length;
+  cigar_lengths[*i] = align->cigar_length;
+  cigar_n[*i] = malloc( sizeof(int) * align->cigar_length );
+  cigar_ops[*i] = malloc( sizeof(int) * align->cigar_length );
+  for(int j=0; j < align->cigar_length; ++j){
+    cigar_n[*i][j] = align->cigar_n[j];
+    cigar_ops[*i][j] = align->cigar_ops[j];
+  }
+  // increment the operator..
+  (*i)++;
+  harvest_sw_aligns( align->top_left, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
+  harvest_sw_aligns( align->top_right, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
+  harvest_sw_aligns( align->bottom_left, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
+  harvest_sw_aligns( align->bottom_right, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
+}
 

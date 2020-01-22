@@ -902,6 +902,102 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   return( ret_data );
 }
 
+SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
+		    SEXP sub_matrix_r, SEXP gap_r){
+  if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP  )
+    error("a_seq_r and b_seq_r must both be R strings");
+  if( TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
+    error("al_offset_r and al_size_r must both be ints");
+  if( TYPEOF(sub_matrix_r) != INTSXP || !isMatrix(sub_matrix_r) )
+    error("sub_matrix_r should be a numeric matrix");
+  if( TYPEOF(gap_r) != INTSXP || length(gap_r) != 2 )
+    error("gap_r should be an integer vector of length 2 (insertion, extension)");
+  if(length(al_offset_r) != 1 || length(al_size_r) != 1 || length(a_seq_r) != 1
+     || length(b_seq_r) != 1 )
+    error("most arguments should have a length of one");
+  // make C-variables
+  int al_offset = asInteger(al_offset_r);
+  int al_size = asInteger(al_size_r);
+  
+  SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
+  int nrow = INTEGER(sub_matrix_dims)[0];
+  int ncol = INTEGER(sub_matrix_dims)[1];
+  if(nrow != ncol || nrow != al_size)
+    error("faulty matrix dimensions: %d, %d should both be: %d", nrow, ncol, al_size);
+  int *sub_table = INTEGER( sub_matrix_r );
+
+  int a_l = length( STRING_ELT( a_seq_r, 0 ));
+  const unsigned char *a_seq = (const unsigned char*)CHAR( STRING_ELT( a_seq_r, 0 ));
+  int b_l = length( STRING_ELT( b_seq_r, 0 ));
+  const unsigned char *b_seq = (const unsigned char*)CHAR( STRING_ELT( b_seq_r, 0 ));
+
+  int *gap = INTEGER(gap_r);
+  // here I need to create the score and pointer tables. I can make these as part of the
+  // R data structure that is returned...
+  // Lets return:
+  // 1. The score matrix
+  // 2. The pointer matrix
+  // 3. A matrix with a row for each alignment extracted and with columns:
+  //    a.beg, a.end, b.beg, b.end, score, al.length
+  // 4. A list containing a 2 row matrix with one column for each cigar operation
+  //    where row 1 contains the operations and row two contains the length of each op
+  // Given that we return so much it would make sense to also return the aligned
+  // sequences. But we can do that later..
+  SEXP ret_data = PROTECT(allocVector( VECSXP, 4 ));
+  // the score and pointer matrices, both expressed as integers; very wasteful
+  // but what the hell.. 
+  SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
+  SET_VECTOR_ELT( ret_data, 1, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
+  int *score_table = INTEGER(VECTOR_ELT( ret_data, 0 ));
+  int *ptr_table = INTEGER(VECTOR_ELT( ret_data, 1 ));
+
+  // we don't actually make use of the max score and it's position here, but
+  // it can be useful..
+  int max_score, max_row, max_column;
+  smith_waterman( a_seq, b_seq, a_l, b_l, gap[0], gap[1],
+		  sub_table, al_offset, al_size,
+		  score_table, ptr_table,
+		  &max_score, &max_row, &max_column );
+
+  // Then extract the alignments into a tree of alignments..
+  // I will need a recursive function to extract out the resulting data..
+  // But lets see how we can do that..
+  struct sw_alignment *sw_align = 0;
+  extract_sw_alignments( ptr_table, score_table, a_l + 1, b_l + 1,
+			0, a_l+1, 0, b_l+1, &sw_align );
+  int aligns_n;
+  count_sw_alignments( sw_align, &aligns_n );
+  // this then allows us to set the other members of the table..
+  if(aligns_n){
+    // create the suitable data structures..
+    SET_VECTOR_ELT( ret_data, 2, allocMatrix( INTSXP, aligns_n, 6 ));
+    SET_VECTOR_ELT( ret_data, 3, allocVector( VECSXP, aligns_n ));
+    // since I do not want to deal with SEXP operations in the recursive function
+    // and I do not know the size of the invidual operations I will copy out the
+    // data to a set of arrays here...
+    int *align_table = INTEGER( VECTOR_ELT( ret_data, 2 ));
+    int **cigar_ops = malloc( sizeof(int*) * aligns_n );
+    int **cigar_n = malloc( sizeof(int*) * aligns_n );
+    int *cigar_lengths = malloc( sizeof(int) * aligns_n );
+    int i = 0; // an index operator for this..
+    harvest_sw_aligns( sw_align, align_table, cigar_ops, cigar_n, cigar_lengths, &i, aligns_n );
+    SEXP cigars = VECTOR_ELT( ret_data, 3 );
+    for(int i=0; i < aligns_n; ++i){
+      SET_VECTOR_ELT( cigars, i, allocMatrix(INTSXP, cigar_lengths[i], 2 ) );
+      int *cig = INTEGER(VECTOR_ELT( cigars, i ));
+      memcpy( cig, cigar_ops[i], sizeof(int) * cigar_lengths[i] );
+      memcpy( cig + cigar_lengths[i], cigar_n[i], sizeof(int) * cigar_lengths[i] );
+      free(cigar_ops[i]);
+      free(cigar_n[i]);
+    }
+    free(cigar_ops);
+    free(cigar_n);
+    free_sw_alignments( sw_align );
+  }
+  UNPROTECT(1);
+  return( ret_data );
+}
+
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},

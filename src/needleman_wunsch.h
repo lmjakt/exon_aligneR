@@ -108,5 +108,9 @@ void extract_sw_alignments(int *ptr_table, int *score_table, int height, int wid
 
 void free_sw_alignments( struct sw_alignment *align );
 void count_sw_alignments( struct sw_alignment *align, int *n);
+void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
+			int **cigar_ops, int **cigar_n, int *cigar_lengths,
+			int *i, int aligns_n );
+
 
 #endif

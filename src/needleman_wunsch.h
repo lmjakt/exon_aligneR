@@ -71,4 +71,42 @@ void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, in
 		     int *score_table, int *ptr_table,
 		     int *max_score, int *max_row, int *max_column);
 
+
+// A linked list that can be used when extracting all non-masked alignments
+// From a given region.
+
+struct sw_alignment {
+  int row_begin, row_end;
+  int col_begin, col_end;
+  int score;
+  // the length of the alignment including inserts and deleteions
+  int al_length;
+  // We encode the cigar string with one char and one integer per
+  // operation (in two arrays). This is incredibly wasteful, but this
+  // can be directly handled in R.
+  unsigned char *cigar_ops;
+  int *cigar_n;
+  int cigar_length;
+  // pointers to alignments not masked by this alignment.
+  // default to 0 values
+  struct sw_alignment *top_left;
+  struct sw_alignment *top_right;
+  struct sw_alignment *bottom_left;
+  struct sw_alignment *bottom_right;
+};
+
+// This is a 4-way recursive alignment that harvests all unique position.
+// Procedure:
+// 1. Find highest score within the indicated table region;
+// 2. Extract the alignment and assign the values to a new sw_align
+//    struct. Assign this struct to the sw_align pointer.
+// 3. Call extract_sw_alignments for the four regions of the table that
+//    are not shadowed by the extracted alignment. 
+void extract_sw_alignments(int *ptr_table, int *score_table, int height, int width,
+			   int row_begin, int row_end, int col_begin, int col_end,
+			   struct sw_alignment **sw_align);
+
+void free_sw_alignments( struct sw_alignment *align );
+void count_sw_alignments( struct sw_alignment *align, int *n);
+
 #endif

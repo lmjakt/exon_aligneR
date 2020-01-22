@@ -49,6 +49,10 @@
 /*   return(max_i); */
 /* } */
 
+const int left = 1;
+const int up = 2;
+const int diag = 3;
+
 int which_max_d(double *v, int l){
   int max_i = 0;
   double max = v[0];
@@ -85,7 +89,7 @@ void init_scores( int *scores, int height, int width, char gap_i, char gap_e, ch
 }
 
 // Does not init the whole table
-void init_ptr( int *ptr, int height, int width, const int left, const int up ){
+void init_ptr( int *ptr, int height, int width){  // const int left, const int up ){
   memset( (void*)ptr, 0, sizeof(int) * height * width );
   ptr[0] = 0;
   //  Rprintf("init pointers dims: %d, $d\n", height, width );
@@ -130,11 +134,9 @@ void needleman_wunsch( const unsigned char *a, const unsigned char *b, int a_l, 
 {
   int height = a_l + 1;
   int width = b_l + 1;
-  const int left = 1;
-  const int up = 2;
 
   init_scores( score_table, height, width, gap_i, gap_e, tgaps_free );
-  init_ptr( ptr_table, height, width, left, up );
+  init_ptr( ptr_table, height, width); //, left, up );
   
   // whether we allow terminal gaps at the beginning or not.
   int a_tgap_free = tgaps_free && a_l > b_l;
@@ -418,9 +420,9 @@ void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, in
 {
   int height = a_l + 1;
   int width = b_l + 1;
-  const int left = 1;
-  const int up = 2;
-  const int diag = 3;
+  /* const int left = 1; */
+  /* const int up = 2; */
+  /* const int diag = 3; */
 
   // for a smith waterman the initial score table is all 0s as we can start
   // an alignment from anywhere. 
@@ -464,6 +466,135 @@ void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, in
       }
     }
   }
-  
-
 }
+
+
+// in common with C++ iterators we take end to mean the position after the
+// the last position; that is it is equivalent to the size of the table when
+// starting counting at 0.
+// height and width, and so on, ought to be unsigned ints here.. or size_t
+// though I do not need 64 bits for these.
+void extract_sw_alignments(int *ptr_table, int *score_table, int height, int width,
+			   int row_begin, int row_end, int col_begin, int col_end,
+			   struct sw_alignment **sw_align)
+{
+  // make sure that the ranges are reasonble
+  // hard coded for now; this ought to be changed.
+  if( row_end - row_begin < 4 || col_end - col_begin < 4)
+    return;
+  int max_score = 0;
+  int max_row = 0;
+  int max_column = 0;
+
+  // default to there not being an alignment within the field:
+  *sw_align = 0;
+
+  if(row_end > height || col_end > width)
+    return;
+  
+  for(int row=row_begin; row < row_end; ++row){
+    for(int col=col_begin; col < col_end; ++col){
+      int o = row + col * height;
+      if( score_table[o] > max_score ){
+	max_score = score_table[o];
+	max_row = row;
+	max_column = col;
+      }
+    }
+  }
+  if(max_score == 0)
+    return;
+  // Then extract the number of positions in the residue. When doing this we can also do other things
+  int al_length = 0;
+  int row = max_row;
+  int col = max_column;
+  int o = row + col * height;
+  int last_op = 0;
+  int op_count = 0;
+  while( ptr_table[o] && (row >= row_begin || col >= col_begin) ){
+    col = (ptr_table[o] & left) ? col - 1 : col;
+    row = (ptr_table[o] & up) ? row - 1 : row;
+    if(ptr_table[o] != last_op){
+      op_count++;
+      last_op = ptr_table[o];
+    }
+    al_length++;
+  }
+  // op_count lets us specify the cigar string; Note that the how we encode
+  // the cigar string is a bit problematic. We could use a 14 bit represntation
+  // giving us a maximum length of 16384, or a 30 bit representation, giving us
+  // way more than we need. But this kind of string will not be very useful
+  // in R; in any case it seems difficult to interrogate more than 31 bits
+  // in R (which is probably related to the lack of unsigned integers).
+  (*sw_align) = malloc( sizeof(struct sw_alignment) );
+  struct sw_alignment *align = *sw_align;  // for ease of use
+  memset( (void*)align, 0, sizeof(struct sw_alignment) );
+  align->cigar_length = op_count;
+  align->cigar_ops = malloc( sizeof(unsigned char) * op_count);
+  align->cigar_n = malloc( sizeof(int) * op_count );
+  memset( align->cigar_ops, 0, sizeof(unsigned char) * op_count );
+  memset( align->cigar_n, 0, sizeof(int) * op_count );
+  align->al_length = al_length;
+  align->score = max_score;
+  align->row_begin = row;
+  align->row_end = max_row;
+  align->col_begin = col;
+  align->col_end = max_column;
+
+  // and then we go through again and fill in the counts..
+  int cigar_i = op_count; // decrement before use
+  row = max_row;
+  col = max_column;
+  o = row + col * height;
+  last_op = 0;
+  while( ptr_table[o] && (row >= row_begin || col >= col_begin) ){
+    col = (ptr_table[o] & left) ? col - 1 : col;
+    row = (ptr_table[o] & up) ? row - 1 : row;
+    if(ptr_table[o] != last_op){
+      cigar_i--;
+      align->cigar_ops[cigar_i] = ptr_table[o];
+      align->cigar_n[cigar_i]++;
+      last_op = ptr_table[o];
+    }
+  }
+  // and then we recurse to the four remaining quadrants.. 
+  extract_sw_alignments(ptr_table, score_table, height, width,
+			row_begin, align->row_begin, col_begin, align->col_begin,
+			&(align->top_left));
+  extract_sw_alignments(ptr_table, score_table, height, width,
+			align->row_end+1, row_end, col_begin, align->col_begin,
+			&(align->bottom_left));
+  extract_sw_alignments(ptr_table, score_table, height, width,
+			row_begin, align->row_begin, align->col_end+1, col_end,
+			&(align->top_right));
+  extract_sw_alignments(ptr_table, score_table, height, width,
+			align->row_end+1, row_end, align->col_end+1, col_end,
+			&(align->bottom_right));
+  // and that should pretty much magically take care of things.
+}
+
+void free_sw_alignments( struct sw_alignment *align )
+{
+  if(!align)
+    return;
+  free_sw_alignments( align->top_left );
+  free_sw_alignments( align->top_right );
+  free_sw_alignments( align->bottom_left );
+  free_sw_alignments( align->bottom_right );
+  free( align->cigar_ops );
+  free( align->cigar_n );
+  free( align );
+}
+
+void count_sw_alignments( struct sw_alignment *align, int *n)
+{
+  if(!align)
+    return;
+  (*n)++;
+  count_sw_alignments( align->top_left, n );
+  count_sw_alignments( align->top_right, n );
+  count_sw_alignments( align->bottom_left, n );
+  count_sw_alignments( align->bottom_right, n );
+}
+
+

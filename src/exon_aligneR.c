@@ -903,7 +903,7 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
 }
 
 SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
-		    SEXP sub_matrix_r, SEXP gap_r){
+		      SEXP sub_matrix_r, SEXP gap_r, SEXP min_width_r, SEXP min_score_r){
   if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP  )
     error("a_seq_r and b_seq_r must both be R strings");
   if( TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
@@ -915,9 +915,15 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   if(length(al_offset_r) != 1 || length(al_size_r) != 1 || length(a_seq_r) != 1
      || length(b_seq_r) != 1 )
     error("most arguments should have a length of one");
+  if( TYPEOF(min_width_r) != INTSXP || TYPEOF(min_score_r) != INTSXP )
+    error("min width and min_score should be given as integer values");
+  if( length(min_width_r) != 1 || length(min_score_r) != 1 )
+    error("min_width and min_score should have a length of 1");
   // make C-variables
   int al_offset = asInteger(al_offset_r);
   int al_size = asInteger(al_size_r);
+  int min_width = asInteger(min_width_r);
+  int min_score = asInteger(min_score_r);
   
   SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
   int nrow = INTEGER(sub_matrix_dims)[0];
@@ -943,7 +949,7 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   //    where row 1 contains the operations and row two contains the length of each op
   // Given that we return so much it would make sense to also return the aligned
   // sequences. But we can do that later..
-  SEXP ret_data = PROTECT(allocVector( VECSXP, 4 ));
+  SEXP ret_data = PROTECT(allocVector( VECSXP, 5 ));
   // the score and pointer matrices, both expressed as integers; very wasteful
   // but what the hell.. 
   SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
@@ -963,15 +969,23 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   // I will need a recursive function to extract out the resulting data..
   // But lets see how we can do that..
   struct sw_alignment *sw_align = 0;
-  extract_sw_alignments( ptr_table, score_table, a_l + 1, b_l + 1,
-			0, a_l+1, 0, b_l+1, &sw_align );
-  int aligns_n;
+  extract_sw_alignments(a_seq, b_seq,
+			ptr_table, score_table, a_l + 1, b_l + 1,
+			0, a_l+1, 0, b_l+1, &sw_align, min_score, min_width );
+  //  Rprintf("and that returned");
+  int aligns_n = 0;
   count_sw_alignments( sw_align, &aligns_n );
   // this then allows us to set the other members of the table..
   if(aligns_n){
     // create the suitable data structures..
     SET_VECTOR_ELT( ret_data, 2, allocMatrix( INTSXP, aligns_n, 6 ));
     SET_VECTOR_ELT( ret_data, 3, allocVector( VECSXP, aligns_n ));
+    SET_VECTOR_ELT( ret_data, 4, allocVector( VECSXP, aligns_n));
+    SEXP al_strings = VECTOR_ELT( ret_data, 4 );
+    // There does not seem to be a way to set the column names without setting
+    // the column names. Using NILSXP causes a memory fault;
+    // Using R_NamesSymbol doesn't work, and R_DimNamesSymbol didn't like NILSXP
+
     // since I do not want to deal with SEXP operations in the recursive function
     // and I do not know the size of the invidual operations I will copy out the
     // data to a set of arrays here...
@@ -979,8 +993,10 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
     int **cigar_ops = malloc( sizeof(int*) * aligns_n );
     int **cigar_n = malloc( sizeof(int*) * aligns_n );
     int *cigar_lengths = malloc( sizeof(int) * aligns_n );
+    char **a_al = malloc( sizeof(char*) * aligns_n );
+    char **b_al = malloc( sizeof(char*) * aligns_n );
     int i = 0; // an index operator for this..
-    harvest_sw_aligns( sw_align, align_table, cigar_ops, cigar_n, cigar_lengths, &i, aligns_n );
+    harvest_sw_aligns( sw_align, align_table, cigar_ops, cigar_n, cigar_lengths, &i, aligns_n, a_al, b_al );
     SEXP cigars = VECTOR_ELT( ret_data, 3 );
     for(int i=0; i < aligns_n; ++i){
       SET_VECTOR_ELT( cigars, i, allocMatrix(INTSXP, cigar_lengths[i], 2 ) );
@@ -989,9 +1005,14 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
       memcpy( cig + cigar_lengths[i], cigar_n[i], sizeof(int) * cigar_lengths[i] );
       free(cigar_ops[i]);
       free(cigar_n[i]);
+      SET_VECTOR_ELT( al_strings, i, allocVector(STRSXP, 2));
+      SET_STRING_ELT( VECTOR_ELT( al_strings, i ), 0, mkChar( a_al[i] ));
+      SET_STRING_ELT( VECTOR_ELT( al_strings, i ), 1, mkChar( b_al[i] ));
     }
     free(cigar_ops);
     free(cigar_n);
+    free(a_al);
+    free(b_al);
     free_sw_alignments( sw_align );
   }
   UNPROTECT(1);
@@ -1003,6 +1024,7 @@ static const R_CallMethodDef callMethods[] = {
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
   {"align_seqs_mt", (DL_FUNC)&align_seqs_mt, 9},
   {"nucl_align_stats", (DL_FUNC)&nucl_align_stats, 1},
+  {"sw_aligns", (DL_FUNC)&smith_waterman_r, 8},
   {NULL, NULL, 0}
 };
 

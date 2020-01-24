@@ -535,3 +535,64 @@ t.perf.5.o4 <- sapply(1:12, function(t){
 
 t.perf.5.o4['elapsed',] / t.perf.2['elapsed',]
 ## OK, that is faster by about 15 to 20%. 4 days instead of 5.. 
+
+## avoid setting the full score and table to 0 using memset..
+dyn.load("src/exon_aligneR.so")
+t.perf.6.o4 <- sapply(1:12, function(t){
+    system.time(
+        tmp <- align.seqs.mt( exon.i[1], b.seq, al.offset, al.size, sub.matrix, gap=as.integer(c(-10, -1)),
+                         tgaps.free=TRUE, sp.char="I", thread.n=t)
+    )
+})
+
+t.perf.6.o4['elapsed',] / t.perf.2['elapsed',]
+## [1] 0.7686497 0.8440546 0.8385417 0.8191126 0.8008130 0.7782805 0.8115942
+## [8] 0.7884615 0.7931034 0.7358491 0.7676768 0.7846154
+
+## that gives quite variable results, and in general has more effect for a single
+## thread than for others. Up to 75%.
+
+
+## Lets try the new smith waterman alignment
+
+sw.aligns <- .Call("sw_aligns", exon.i[1], exon.i[2], al.offset, al.size, sub.matrix, as.integer(c(-10, -1)) )
+
+plot.new()
+plot.window( xlim=c(0,nchar(exon.i[2])), ylim=c(0, nchar(exon.i[1])), asp=1 )
+rect(0, 0, nchar(exon.i[2]), nchar(exon.i[1]))
+segments( sw.aligns[[3]][,3], sw.aligns[[3]][,1], sw.aligns[[3]][,4], sw.aligns[[3]][,2], col=hsvScale(sw.aligns[[3]][,5]), lwd=3 )
+#abline( v=sw.aligns[[3]][,3] )
+abline( h=sw.aligns[[3]][,1] )
+abline( h=sw.aligns[[3]][,2] )
+## so that seems to be ok, but the 
+
+sw.aligns <- .Call("sw_aligns", exon.i[1], exon.i[16], al.offset, al.size, sub.matrix, as.integer(c(-10, -1)), 6L, 20L )
+
+
+system.time(
+    for(i in 1:100){
+        sw.aligns <- .Call("sw_aligns", exon.i[1], exon.i[16], al.offset, al.size, sub.matrix, as.integer(c(-10, -1)), 6L, 20L )
+    }
+)
+##  user  system elapsed 
+## 1.194   0.052   1.247 
+
+nchar( exon.i[1] ) ## 625
+nchar( exon.i[2] ) ## 337
+## so these are short and the 100 alignments per second is not particularly great..
+## but we know that this is not a fast function, because of lots of extra stuff
+## being done. 
+
+plot.new()
+plot.window( xlim=c(0,nchar(exon.i[16])), ylim=c(0, nchar(exon.i[1])), asp=1 )
+rect(0, 0, nchar(exon.i[16]), nchar(exon.i[1]))
+segments( sw.aligns[[3]][,3], sw.aligns[[3]][,1], sw.aligns[[3]][,4], sw.aligns[[3]][,2], col=hsvScale(sw.aligns[[3]][,5]), lwd=3 )
+#abline( v=sw.aligns[[3]][,3] )
+##abline( h=sw.aligns[[3]][,2] )
+
+sw.aligns <- .Call("sw_aligns", substr(exon.i[1], 1, 20), substr(exon.i[16], 1, 20), al.offset, al.size, sub.matrix, as.integer(c(-10, -1)) )
+
+plot.new()
+plot.window( xlim=c(0,nchar(exon.i[16])), ylim=c(0, nchar(exon.i[1])), asp=1 )
+rect(0, 0, nchar(exon.i[16]), nchar(exon.i[1]))
+segments( sw.aligns[[3]][,3], sw.aligns[[3]][,1], sw.aligns[[3]][,4], sw.aligns[[3]][,2], col=hsvScale(sw.aligns[[3]][,5]), lwd=3 )

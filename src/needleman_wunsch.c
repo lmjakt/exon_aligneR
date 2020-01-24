@@ -420,9 +420,6 @@ void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, in
 {
   int height = a_l + 1;
   int width = b_l + 1;
-  /* const int left = 1; */
-  /* const int up = 2; */
-  /* const int diag = 3; */
 
   // for a smith waterman the initial score table is all 0s as we can start
   // an alignment from anywhere. 
@@ -441,23 +438,26 @@ void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, in
       int o_diag = o - (height + 1);
       int m_score_o = (a[row-1] - al_offset) + (b[column-1] - al_offset) * al_size;
 
-      int left_score = score_table[o_left] + (ptr_table[o_left] == left) ? gap_e : gap_i;
-      int up_score = score_table[o_up] + (ptr_table[o_up] == up);
+      int left_score = score_table[o_left] + (((ptr_table[o_left] & ptr_mask) == left) ? gap_e : gap_i);
+      int up_score = score_table[o_up] + (((ptr_table[o_up] & ptr_mask) == up) ? gap_e : gap_i);
       int diag_score = score_table[o_diag] + sub_table[ m_score_o ];
 
-      // we could probably do this by directly calculating the alternative scores
-      // rather than
+      // I used to make a vector of scores and use a function to calculate the max.
+      // This is marginally faster.
       if(left_score > score_table[o]){
 	score_table[o] = left_score;
-	ptr_table[o] = left;
+	ptr_table[o] = left | (((( ptr_table[o_left] & left_mask ) >> left_shift) + 1) << left_shift );
+	ptr_table[o] |=  (ptr_table[o_left] & up_mask);
       }
       if(up_score > score_table[o]){
 	score_table[o] = up_score;
-	ptr_table[o] = up;
+	ptr_table[o] = up | ( ((( ptr_table[o_up] & up_mask ) >> up_shift) + 1) << up_shift )  ;
+	ptr_table[o] |=  ( ptr_table[o_up] & left_mask ); 
       }
       if(diag_score > score_table[o]){
 	score_table[o] = diag_score;
-	ptr_table[o] = diag;
+	ptr_table[o] = diag | ( ((( ptr_table[o_diag] & left_mask ) >> left_shift) + 1) << left_shift );
+	ptr_table[o] |= ( ((( ptr_table[o_diag] & up_mask ) >> up_shift) + 1) << up_shift ); 
       }
       if(score_table[o] > *max_score){
 	*max_score = score_table[o];
@@ -469,18 +469,20 @@ void smith_waterman( const unsigned char *a, const unsigned char *b, int a_l, in
 }
 
 
-// in common with C++ iterators we take end to mean the position after the
+// This considers columns and rows different. It would be more appropriate to say:
+// Extract non-overlapping alignments of sequence a (rows) to sequence b.
+// Alignments can overlap in b (columns), but not in rows.
+// In common with C++ iterators we take end to mean the position after the
 // the last position; that is it is equivalent to the size of the table when
 // starting counting at 0.
-// height and width, and so on, ought to be unsigned ints here.. or size_t
-// though I do not need 64 bits for these.
-void extract_sw_alignments(int *ptr_table, int *score_table, int height, int width,
+void extract_sw_alignments(const unsigned char *a, const unsigned char *b,
+			   int *ptr_table, int *score_table, int height, int width,
 			   int row_begin, int row_end, int col_begin, int col_end,
-			   struct sw_alignment **sw_align)
+			   struct sw_alignment **sw_align, int min_width, int min_score)
 {
   // make sure that the ranges are reasonble
   // hard coded for now; this ought to be changed.
-  if( row_end - row_begin < 4 || col_end - col_begin < 4)
+  if( row_end - row_begin < min_width || col_end - col_begin < min_width)
     return;
   int max_score = 0;
   int max_row = 0;
@@ -488,14 +490,16 @@ void extract_sw_alignments(int *ptr_table, int *score_table, int height, int wid
 
   // default to there not being an alignment within the field:
   *sw_align = 0;
-
   if(row_end > height || col_end > width)
     return;
   
   for(int row=row_begin; row < row_end; ++row){
     for(int col=col_begin; col < col_end; ++col){
       int o = row + col * height;
-      if( score_table[o] > max_score ){
+      int l_moves = (ptr_table[o] & left_mask) >> left_shift;
+      int u_moves = (ptr_table[o] & up_mask) >> up_shift;
+      if( score_table[o] >= max_score && score_table[o] >= min_score &&
+	  row - u_moves >= row_begin && col - l_moves >= col_begin ){
 	max_score = score_table[o];
 	max_row = row;
 	max_column = col;
@@ -511,13 +515,14 @@ void extract_sw_alignments(int *ptr_table, int *score_table, int height, int wid
   int o = row + col * height;
   int last_op = 0;
   int op_count = 0;
-  while( ptr_table[o] && (row >= row_begin || col >= col_begin) ){
+  while( (ptr_table[o] & ptr_mask) && (row > 0 || col > 0) ){
+    if((ptr_table[o] & ptr_mask) != last_op){
+      op_count++;
+      last_op = (ptr_table[o] & ptr_mask);
+    }
     col = (ptr_table[o] & left) ? col - 1 : col;
     row = (ptr_table[o] & up) ? row - 1 : row;
-    if(ptr_table[o] != last_op){
-      op_count++;
-      last_op = ptr_table[o];
-    }
+    o = row + col * height;
     al_length++;
   }
   // op_count lets us specify the cigar string; Note that the how we encode
@@ -541,48 +546,51 @@ void extract_sw_alignments(int *ptr_table, int *score_table, int height, int wid
   align->col_begin = col;
   align->col_end = max_column;
 
+  align->a_al = malloc( sizeof(char) * (al_length + 1) );
+  align->b_al = malloc( sizeof(char) * (al_length + 1) );
+  align->a_al[ al_length ] = 0;
+  align->b_al[ al_length ] = 0;
+    
   // and then we go through again and fill in the counts..
   int cigar_i = op_count; // decrement before use
   row = max_row;
   col = max_column;
   o = row + col * height;
   last_op = 0;
-  while( ptr_table[o] && (row >= row_begin || col >= col_begin) ){
-    col = (ptr_table[o] & left) ? col - 1 : col;
-    row = (ptr_table[o] & up) ? row - 1 : row;
-    if(ptr_table[o] != last_op){
+  int align_i = al_length-1;
+  while( (ptr_table[o] & ptr_mask) && (row > 0 || col > 0) ){
+    if((ptr_table[o] & ptr_mask) != last_op){
       cigar_i--;
-      align->cigar_ops[cigar_i] = ptr_table[o];
-      align->cigar_n[cigar_i]++;
-      last_op = ptr_table[o];
+      align->cigar_ops[cigar_i] = (ptr_table[o] & ptr_mask);
+      last_op = (ptr_table[o] & ptr_mask);
     }
+    align->a_al[ align_i ] = (ptr_table[o] & up) ? a[ row-1 ] : '-';
+    align->b_al[ align_i ] = (ptr_table[o] & left) ? b[col-1] : '-';
+    align_i--;
+    row = (ptr_table[o] & up) ? row - 1 : row;
+    col = (ptr_table[o] & left) ? col - 1 : col;
+    o = row + col * height;
+    align->cigar_n[cigar_i]++;
   }
   // and then we recurse to the four remaining quadrants.. 
-  extract_sw_alignments(ptr_table, score_table, height, width,
-			row_begin, align->row_begin, col_begin, align->col_begin,
-			&(align->top_left));
-  extract_sw_alignments(ptr_table, score_table, height, width,
-			align->row_end+1, row_end, col_begin, align->col_begin,
-			&(align->bottom_left));
-  extract_sw_alignments(ptr_table, score_table, height, width,
-			row_begin, align->row_begin, align->col_end+1, col_end,
-			&(align->top_right));
-  extract_sw_alignments(ptr_table, score_table, height, width,
-			align->row_end+1, row_end, align->col_end+1, col_end,
-			&(align->bottom_right));
-  // and that should pretty much magically take care of things.
+  extract_sw_alignments(a, b, ptr_table, score_table, height, width,
+			row_begin, align->row_begin, col_begin, col_end,
+			&(align->top), min_width, min_score);
+  extract_sw_alignments(a, b, ptr_table, score_table, height, width,
+			align->row_end+1, row_end, col_begin, col_end,
+			&(align->bottom), min_width, min_score);
 }
 
 void free_sw_alignments( struct sw_alignment *align )
 {
   if(!align)
     return;
-  free_sw_alignments( align->top_left );
-  free_sw_alignments( align->top_right );
-  free_sw_alignments( align->bottom_left );
-  free_sw_alignments( align->bottom_right );
+  free_sw_alignments( align->top );
+  free_sw_alignments( align->bottom );
   free( align->cigar_ops );
   free( align->cigar_n );
+  free( align->a_al );
+  free( align->b_al );
   free( align );
 }
 
@@ -591,20 +599,17 @@ void count_sw_alignments( struct sw_alignment *align, int *n)
   if(!align)
     return;
   (*n)++;
-  count_sw_alignments( align->top_left, n );
-  count_sw_alignments( align->top_right, n );
-  count_sw_alignments( align->bottom_left, n );
-  count_sw_alignments( align->bottom_right, n );
+  count_sw_alignments( align->top, n );
+  count_sw_alignments( align->bottom, n );
 }
 
 void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
 			int **cigar_ops, int **cigar_n, int *cigar_lengths,
-			int *i, int aligns_n ){
+			int *i, int aligns_n, char **a_al, char **b_al ){
   if(!align || *i >= aligns_n)
     return;
 
   // copy the data to the i th position;
-  // presumably this could be done with a memcpy. 
   align_table[ (*i) + aligns_n * 0] = align->row_begin;
   align_table[ (*i) + aligns_n * 1] = align->row_end;
   align_table[ (*i) + aligns_n * 2] = align->col_begin;
@@ -618,11 +623,11 @@ void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
     cigar_n[*i][j] = align->cigar_n[j];
     cigar_ops[*i][j] = align->cigar_ops[j];
   }
+  a_al[(*i)] = align->a_al;
+  b_al[(*i)] = align->b_al;
   // increment the operator..
   (*i)++;
-  harvest_sw_aligns( align->top_left, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
-  harvest_sw_aligns( align->top_right, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
-  harvest_sw_aligns( align->bottom_left, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
-  harvest_sw_aligns( align->bottom_right, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n );
+  harvest_sw_aligns( align->top, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n, a_al, b_al );
+  harvest_sw_aligns( align->bottom, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n, a_al, b_al );
 }
 

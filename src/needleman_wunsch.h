@@ -1,6 +1,18 @@
 #ifndef NEEDLEMAN_WUNSCH_H
 #define NEEDLEMAN_WUNSCH_H
 
+// in order to keep track of the starting position of
+// any tracks we can put more data into the integers
+// We get 15 bits of left and right which is up to
+// 32000 bases; we are not going to do alignments
+// that are that long. Well, we might if we had a short
+// sequence against a very long one;
+static const unsigned int ptr_mask =  3;
+static const unsigned int left_mask = ((1 << 15) - 1) << 2;
+static const unsigned int up_mask = (((1 << 15) - 1) << 2) << 15;
+static const unsigned int left_shift = 2;
+static const unsigned int up_shift = 17;
+
 //int which_max_i(int *v, int l);
 // try with a static inline function which_max_i
 static int which_max_i(int *v, int l){
@@ -84,15 +96,21 @@ struct sw_alignment {
   // We encode the cigar string with one char and one integer per
   // operation (in two arrays). This is incredibly wasteful, but this
   // can be directly handled in R.
+  // sequences with gaps inserted appropriately.
+  // Note that these will be 0-terminated.
+  char *a_al;
+  char *b_al;
   unsigned char *cigar_ops;
   int *cigar_n;
   int cigar_length;
   // pointers to alignments not masked by this alignment.
   // default to 0 values
-  struct sw_alignment *top_left;
-  struct sw_alignment *top_right;
-  struct sw_alignment *bottom_left;
-  struct sw_alignment *bottom_right;
+  struct sw_alignment *top;
+  struct sw_alignment *bottom;
+  /* struct sw_alignment *top_left; */
+  /* struct sw_alignment *top_right; */
+  /* struct sw_alignment *bottom_left; */
+  /* struct sw_alignment *bottom_right; */
 };
 
 // This is a 4-way recursive alignment that harvests all unique position.
@@ -102,15 +120,18 @@ struct sw_alignment {
 //    struct. Assign this struct to the sw_align pointer.
 // 3. Call extract_sw_alignments for the four regions of the table that
 //    are not shadowed by the extracted alignment. 
-void extract_sw_alignments(int *ptr_table, int *score_table, int height, int width,
+void extract_sw_alignments(const unsigned  char *a, const unsigned char *b,
+			   int *ptr_table, int *score_table, int height, int width,
 			   int row_begin, int row_end, int col_begin, int col_end,
-			   struct sw_alignment **sw_align);
+			   struct sw_alignment **sw_align,
+			   int min_width, int min_score);
 
 void free_sw_alignments( struct sw_alignment *align );
 void count_sw_alignments( struct sw_alignment *align, int *n);
 void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
 			int **cigar_ops, int **cigar_n, int *cigar_lengths,
-			int *i, int aligns_n );
+			int *i, int aligns_n,
+			char **a_al, char **b_al);
 
 
 #endif

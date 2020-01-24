@@ -126,6 +126,16 @@ align.mt.to.stats <- function( al ){
     stats
 }
 
+### Get local alignments
+
+local.aligns <- function( a, b, al.offset, al.size, sub.matrix, gap, min.width, min.score ){
+    sw <- .Call("sw_aligns", a, b, as.integer(al.offset), as.integer(al.size), sub.matrix,
+                as.integer(gap), as.integer(min.width), as.integer(min.score))
+    for(i in 1:length(sw$cigar))
+        colnames(sw$cigar[[i]]) <- c('op', 'n')
+    sw
+}
+
 ### phylogenetic distance functions. These all take an object of nuc.align.stats as defined above
 ### I got these equations from :
 ### http://bioinformatics.psb.ugent.be/downloads/psb/Userman/treecon_distance.html

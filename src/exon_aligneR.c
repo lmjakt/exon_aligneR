@@ -950,6 +950,12 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   // Given that we return so much it would make sense to also return the aligned
   // sequences. But we can do that later..
   SEXP ret_data = PROTECT(allocVector( VECSXP, 5 ));
+  const char* names[5] = {"scores", "ptrs", "pos", "cigar", "seq"};
+  SEXP names_r = PROTECT(allocVector(STRSXP, 5));
+  for(int i=0; i < 5; ++i)
+    SET_STRING_ELT(names_r, i, mkChar(names[i]));
+  setAttrib( ret_data, R_NamesSymbol, names_r );
+  UNPROTECT(1);
   // the score and pointer matrices, both expressed as integers; very wasteful
   // but what the hell.. 
   SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
@@ -982,10 +988,16 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
     SET_VECTOR_ELT( ret_data, 3, allocVector( VECSXP, aligns_n ));
     SET_VECTOR_ELT( ret_data, 4, allocVector( VECSXP, aligns_n));
     SEXP al_strings = VECTOR_ELT( ret_data, 4 );
-    // There does not seem to be a way to set the column names without setting
-    // the column names. Using NILSXP causes a memory fault;
-    // Using R_NamesSymbol doesn't work, and R_DimNamesSymbol didn't like NILSXP
-
+    // Setting the column names here is a right pain, but it is nicer to do it
+    // here than to have to synchronise within R.
+    const char* colnames[6] = {"a_beg", "a_end", "b_beg", "b_end", "score", "length"};
+    SEXP colnames_r = PROTECT(allocVector(STRSXP, 6));
+    for(int i=0; i < 6; ++i)
+      SET_STRING_ELT( colnames_r, i, mkChar(colnames[i]) );
+    SEXP dim_names = PROTECT(allocVector( VECSXP, 2 ));
+    SET_VECTOR_ELT( dim_names, 1, colnames_r );
+    setAttrib( VECTOR_ELT( ret_data, 2 ), R_DimNamesSymbol, dim_names );
+    UNPROTECT(2);
     // since I do not want to deal with SEXP operations in the recursive function
     // and I do not know the size of the invidual operations I will copy out the
     // data to a set of arrays here...

@@ -902,6 +902,17 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
   return( ret_data );
 }
 
+
+// Arguments:
+// a_seq_r:      Sequence A  (an STRXSP of length 1)
+// b_seq_r:      Sequence B  (an STRSXP of length 1)
+// al_offset_r:  alphabet offset (the first character)
+// al_size_r:    the number of characters in the alphabet (i.e. the
+//               width and height of the sub_matrix_r
+// sub_matrix_r: substitution matrix
+// gap_r:        gap inseration and extension penalties
+// min_width_r:  ?? min width to report an alignment ??
+// min_score_r:  ?? min score to report an alignment ??
 SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
 		      SEXP sub_matrix_r, SEXP gap_r, SEXP min_width_r, SEXP min_score_r){
   if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP  )

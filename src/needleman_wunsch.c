@@ -631,3 +631,142 @@ void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
   harvest_sw_aligns( align->bottom, align_table, cigar_ops, cigar_n, cigar_lengths, i, aligns_n, a_al, b_al );
 }
 
+// align_transcript
+// Takes an intron-marked transcript sequences and aligns to a genomic loci.
+// Introns are marked by a special character (I), which has a high mismatch penalty
+// but no gap insertion (in the genomic sequence).
+// Since genomic loci can be long we must implement a memory efficient form of the
+// the alignment which only returns the aligned regions; i.e. the presumptive exons.
+
+struct transcript_alignment {
+  size_t intron_n;
+  int *intron_beg, *intron_end;
+  size_t exon_n; // should be intron_n + 1
+  int *exon_beg, *exon_end;
+};
+
+
+// This function is very complex and should almost certainly be rewritten.. 
+// Using more sane data structures to reduce the very large number of malloc() calls.
+// 
+// THIS function needs to be broken down into more reasonable structs and functions
+// at the moment it is far too complicated and has far too small a chance of actually
+// working. But I need to do this at a time when I can give more time to the problem.
+//
+// intron_char is the character used to represent introns in tr_seq
+// sub_table is the substitution table, al_offset is the alphabet offset
+// and al_size is the alphabet size
+// gap_i and gap_e are penalties for inserting and extending a gap
+// intron_loss is the penalty for a loss of an intron in the genome sequence.
+#if FALSE
+void align_transcript( struct transcript_alignment *tr_alignment,
+		       const char *tr_seq, const char *g_seq,
+		       int gap_i, int gap_e, int intron_loss, char intron_char,
+		       int *sub_table, int al_offset, int al_size )
+{
+  // We consider R-based matrix coordinates (column major) and that the tr_seq is vertical
+  // with the g_seq along the top.
+  // To find the coordinates of the highest scoring alignment we need only to keep track of the previous
+  // set of scores and alignment types; We will remember only the highest scoring cell for any given column
+  // along with the sum of the operations required to get to that cell.
+  // We also need to remember the starts and lenths of introns; For each of these maxima. But we only need
+  // to remember that for the highest scoring position.
+  
+  // First determine the number of introns;
+  int intron_n = 0;
+  size_t tr_seq_l = 0;
+  for( char nt=tr_seq; *nt > 0; nt++ ){
+    ++tr_seq_l;
+    if( *nt == intron_char )
+      ++intron_n;
+  }
+  int exon_n = intron_n + 1;
+  // these are the scores and the states associated with the previous column
+  // Since at the end we need to remember the beginnings and lengths of all
+  // potential introns we make a table for all of them
+  int *p_scores = malloc( sizeof(int) * (1 + tr_seq_l) );
+  char *p_ops = malloc( sizeof(char) * (1 + tr_seq_l) ); // see below for encoding
+  // how many insertions and deletions (referring to the transcript)
+  // for a given score;
+  // We need one per intron.. 
+  // and we probably need to keep track of the number of matches
+  // as well.. 
+  int *insert_n = malloc( sizeof(int) * tr_seq_l * intron_n);
+  int *delete_n = malloc( sizeof(int) * tr_seq_l * intron_n);
+  int *match_n =  malloc( sizeof(int) * tr_seq_l * intron_n);
+
+  // information about intron positions; also refer to the previous column
+  // of scores
+  int *intron_pos = malloc( sizeof(int) * tr_seq_l * intron_n );
+  int *intron_length = malloc( sizeof(int) * tr_seq_l * intron_n );
+  int *intron_i = malloc( sizeof(int) * tr_seq_l );
+
+  // these should all be set to 0 to start with.
+  memset( (void*)p_scores, 0, sizeof(int) * (1 + tr_seq_l) );
+  memset( (void*)p_operations, 0, sizeof(char) * (1 + t_seq_l) );
+  memset( (void*)insert_n, 0, sizeof(int) * tr_seq_l * intron_n );
+  memset( (void*)delete_n, 0, sizeof(int) * tr_seq_l * intron_n );
+  memset( (void*)match_n, 0, sizeof(int) * tr_seq_l * intron_n );
+  memset( (void*)intron_pos, 0, sizeof(int) * tr_seq_l * intron_n );
+  memset( (void*)intron_length, 0, sizeof(int) * tr_seq_l * intron_n );
+  memset( (void*)intron_i, 0, sizeof(int) * tr_seq_l );
+
+  // The maximum score along the genomic locus
+  int max_score;
+  int max_i;     // (the index or position of the score)
+  int *max_insert_n = malloc(sizeof(int) * intron_n);
+  int *max_delete_n = malloc(sizeof(int) * intron_n);
+  int *max_intron_pos = malloc(sizeof(int) * intron_n);
+  int *max_intron_length = malloc(sizeof(int) * intron_n);
+  int max_intron_i;
+  
+  size_t g_seq_l = strlen( g_seq );
+  for(int i=0; i < g_seq_l; ++i){
+    int pp_score = 0;
+    int pp_op = 0;
+    for(int j=1; j <= tr_seq_l; ++j){
+      // Determine the score for the virtual cell in row j and column (i+1)
+      // based on the scores in insert_n;
+      int cell_max = 0;
+      int cell_op = 0;
+      // operations are: 
+      // insert (move down with gap)
+      // intron_insertion (move down, tr seqeunce is I), heavy penalty
+      // delete (move right with gap)
+      // intron (move right, tr sequence is I), no penalty
+      int ins_penalty = (tr_seq[j-1] == intron_char) ? intron_loss :
+	pp_ops == 1 ? gap_e : gap_i;
+      int del_penalty = (tr_seq[j-1] == intron_char) ? 0 :
+	p_ops[j] == 2 ? gap_e : gap_i;
+      int match_penalty = sub_table[ (g_seq[i]-al_offset) + (tr_seq[j] - al_offset) * al_size ];
+      if(p_scores[j-1] + ins_penalty > cell_max ){
+	cell_max = pp_score + ins_penalty;
+	cell_op = 1;
+      }
+      if(p_scores[j] + del_penalty > cell_max ){
+	cell_max = p_scores[j] + del_penalty;
+	cell_op = 2;
+      }
+      if(p_scores[j-1] + match_penalty > cell_max ){
+	cell_max = p_scores[j-1] + del_penalty;
+	cell_op = 4;
+      }
+      if( (tr_seq[j-1] == intron_char) )
+	cell_op |= 8;
+      p_scores[j] = cell_max;
+      p_ops[j] = cell_op;
+      pp_score = cell_max;
+      pp_op = cell_op;
+      // then update tha maximum and and all the counts;
+      if(cell_score == 0){  // no alignment cannot be maximal.. 
+	intron_i[j] = 0;
+	// the following is very wasteful and should not be necessary most of the
+	// time
+      }
+
+    }
+  }
+  
+
+}
+#endif

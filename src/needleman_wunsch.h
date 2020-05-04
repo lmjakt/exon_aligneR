@@ -15,17 +15,18 @@ static const unsigned int up_shift = 17;
 
 //int which_max_i(int *v, int l);
 // try with a static inline function which_max_i
-static int which_max_i(int *v, int l){
-    int max_i = 0;
-  double max = v[0];
-  for(int i=1; i < l; i++){
-    if(v[i] > max){
-      max = v[i];
-      max_i = i;
-    }
-  }
-  return(max_i);
-}
+// commented to remove warning for lack of use.
+/* static int which_max_i(int *v, int l){ */
+/*     int max_i = 0; */
+/*   double max = v[0]; */
+/*   for(int i=1; i < l; i++){ */
+/*     if(v[i] > max){ */
+/*       max = v[i]; */
+/*       max_i = i; */
+/*     } */
+/*   } */
+/*   return(max_i); */
+/* } */
 
 int which_max_d(double *v, int l);
 int m_offset(int row, int column, int height);

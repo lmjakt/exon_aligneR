@@ -555,7 +555,8 @@ t.perf.6.o4['elapsed',] / t.perf.2['elapsed',]
 
 ## Lets try the new smith waterman alignment
 
-sw.aligns <- .Call("sw_aligns", exon.i[1], exon.i[2], al.offset, al.size, sub.matrix, as.integer(c(-10, -1)) )
+sw.aligns <- .Call("sw_aligns", exon.i[1], exon.i[2], sub.matrix$offset, sub.matrix$size,
+                   sub.matrix$sm, as.integer(c(-10, -1)), 10L, 10L )
 
 plot.new()
 plot.window( xlim=c(0,nchar(exon.i[2])), ylim=c(0, nchar(exon.i[1])), asp=1 )
@@ -590,7 +591,11 @@ segments( sw.aligns[[3]][,3], sw.aligns[[3]][,1], sw.aligns[[3]][,4], sw.aligns[
 #abline( v=sw.aligns[[3]][,3] )
 ##abline( h=sw.aligns[[3]][,2] )
 
-sw.aligns <- .Call("sw_aligns", substr(exon.i[1], 1, 20), substr(exon.i[16], 1, 20), al.offset, al.size, sub.matrix, as.integer(c(-10, -1)) )
+sw.aligns <- .Call("sw_aligns", substr(exon.i[1], 1, 20), substr(exon.i[16], 1, 20),
+                   al.offset, al.size, sub.matrix, as.integer(c(-10, -1)), FALSE )
+
+sw.aligns <- local.aligns( exon.i[1], exon.i[16], sub.matrix$offset, sub.matrix$size, sub.matrix$sm,
+                           c(-10, -1), 20L, 40L)
 
 plot.new()
 plot.window( xlim=c(0,nchar(exon.i[16])), ylim=c(0, nchar(exon.i[1])), asp=1 )

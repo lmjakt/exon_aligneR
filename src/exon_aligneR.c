@@ -914,7 +914,8 @@ SEXP align_seqs_mt(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
 // min_width_r:  ?? min width to report an alignment ??
 // min_score_r:  ?? min score to report an alignment ??
 SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size_r,
-		      SEXP sub_matrix_r, SEXP gap_r, SEXP min_width_r, SEXP min_score_r){
+		      SEXP sub_matrix_r, SEXP gap_r, SEXP min_width_r, SEXP min_score_r,
+		      SEXP keep_scores_r){
   if( TYPEOF(a_seq_r) != STRSXP || TYPEOF(b_seq_r) != STRSXP  )
     error("a_seq_r and b_seq_r must both be R strings");
   if( TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
@@ -923,6 +924,8 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
     error("sub_matrix_r should be a numeric matrix");
   if( TYPEOF(gap_r) != INTSXP || length(gap_r) != 2 )
     error("gap_r should be an integer vector of length 2 (insertion, extension)");
+  if( TYPEOF(keep_scores_r) != LGLSXP || length(keep_scores_r) != 1 )
+    error("keep_scores should be a logical vector of length 1");
   if(length(al_offset_r) != 1 || length(al_size_r) != 1 || length(a_seq_r) != 1
      || length(b_seq_r) != 1 )
     error("most arguments should have a length of one");
@@ -935,6 +938,7 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   int al_size = asInteger(al_size_r);
   int min_width = asInteger(min_width_r);
   int min_score = asInteger(min_score_r);
+  int keep_scores = LOGICAL(keep_scores_r)[0];
   
   SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
   int nrow = INTEGER(sub_matrix_dims)[0];
@@ -969,10 +973,16 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   UNPROTECT(1);
   // the score and pointer matrices, both expressed as integers; very wasteful
   // but what the hell.. 
-  SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
-  SET_VECTOR_ELT( ret_data, 1, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
-  int *score_table = INTEGER(VECTOR_ELT( ret_data, 0 ));
-  int *ptr_table = INTEGER(VECTOR_ELT( ret_data, 1 ));
+  int *score_table, *ptr_table;
+  if(keep_scores){
+    SET_VECTOR_ELT( ret_data, 0, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
+    SET_VECTOR_ELT( ret_data, 1, allocMatrix( INTSXP, a_l + 1, b_l + 1 ));
+    score_table = INTEGER(VECTOR_ELT( ret_data, 0 ));
+    ptr_table = INTEGER(VECTOR_ELT( ret_data, 1 ));
+  }else{
+    score_table = malloc( sizeof(int) * (a_l + 1) * (b_l + 1) );
+    ptr_table = malloc( sizeof(int) * (a_l + 1) * (b_l + 1) );
+  }
 
   // we don't actually make use of the max score and it's position here, but
   // it can be useful..
@@ -1039,6 +1049,10 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
     free_sw_alignments( sw_align );
   }
   UNPROTECT(1);
+  if(!keep_scores){
+    free(score_table);
+    free(ptr_table);
+  }
   return( ret_data );
 }
 
@@ -1047,7 +1061,7 @@ static const R_CallMethodDef callMethods[] = {
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
   {"align_seqs_mt", (DL_FUNC)&align_seqs_mt, 9},
   {"nucl_align_stats", (DL_FUNC)&nucl_align_stats, 1},
-  {"sw_aligns", (DL_FUNC)&smith_waterman_r, 8},
+  {"sw_aligns", (DL_FUNC)&smith_waterman_r, 9},
   {NULL, NULL, 0}
 };
 

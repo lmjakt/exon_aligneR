@@ -25,10 +25,11 @@ read.exons <- function(fname, ex.spacer='I'){
         exons.l[(id.l[i]+1):s.e[i]]
     })
     names(exons) <- sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]][1] })
+    tr.id <- unname(sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]][2] }))
     exon.dbs <- unname(sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]][4] }))
 
     lapply( 1:length(exons), function(i){
-        list('id'=sub("^>", "", names(exons)[i]), 'db'=exon.dbs[i], 'sp'=sub("([^_]+)_([^_]+)_.+$", "\\1 \\2", exon.dbs[i]),
+        list('id'=sub("^>", "", names(exons)[i]), 'tr'=tr.id[i], 'db'=exon.dbs[i], 'sp'=sub("([^_]+)_([^_]+)_.+$", "\\1 \\2", exon.dbs[i]),
              'l'=unname(sapply(exons[[i]], nchar)), e=exons[[i]], 's'=paste(toupper(exons[[i]]), collapse=ex.spacer) )
     })
 }
@@ -128,11 +129,14 @@ align.mt.to.stats <- function( al ){
 
 ### Get local alignments
 
-local.aligns <- function( a, b, al.offset, al.size, sub.matrix, gap, min.width, min.score ){
+local.aligns <- function( a, b, al.offset, al.size, sub.matrix, gap, min.width, min.score,
+                         keep.scores=FALSE){
     sw <- .Call("sw_aligns", a, b, as.integer(al.offset), as.integer(al.size), sub.matrix,
-                as.integer(gap), as.integer(min.width), as.integer(min.score))
-    for(i in 1:length(sw$cigar))
-        colnames(sw$cigar[[i]]) <- c('op', 'n')
+                as.integer(gap), as.integer(min.width), as.integer(min.score), keep.scores)
+    if(length(sw$cigar)){
+        for(i in 1:length(sw$cigar))
+            colnames(sw$cigar[[i]]) <- c('op', 'n')
+    }
     sw
 }
 
@@ -306,17 +310,19 @@ draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, 
 ## though we will make use of the first one
 align.print <- function( al, w ){
     nc <- max(nchar(al[1:2]))
-    beg <- seq(1, nc, w)
-    for(b in beg){
-        s1 <- substr(al[1], b, b+w)
-        s2 <- substr(al[2], b, b+w)
-        s1.c <- strsplit(s1, '')[[1]]
-        s2.c <- strsplit(s2, '')[[1]]
-        id.line <- paste( ifelse( s1.c == s2.c, "|", " " ), collapse='' )
-        cat( sprintf("% 4d  %s\n", b, substr(al[1], b, b+w)) )
-        cat( sprintf("      %s\n", id.line) )
-        cat( sprintf("% 4d  %s\n", b, substr(al[2], b, b+w)) )
-        cat("\n")
+    if(length(al) > 1 && is.finite(nc)){
+        beg <- seq(1, nc, w)
+        for(b in beg){
+            s1 <- substr(al[1], b, b+w)
+            s2 <- substr(al[2], b, b+w)
+            s1.c <- strsplit(s1, '')[[1]]
+            s2.c <- strsplit(s2, '')[[1]]
+            id.line <- paste( ifelse( s1.c == s2.c, "|", " " ), collapse='' )
+            cat( sprintf("% 4d  %s\n", b, substr(al[1], b, b+w)) )
+            cat( sprintf("      %s\n", id.line) )
+            cat( sprintf("% 4d  %s\n", b, substr(al[2], b, b+w)) )
+            cat("\n")
+        }
     }
 }
 

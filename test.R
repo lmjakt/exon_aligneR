@@ -13,6 +13,9 @@ exons <- lapply( 1:length(id.l), function(i){
 names(exons) <- sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]][1] })
 exon.dbs <- unname(sapply( exons.l[id.l], function(x){ strsplit(x, split="\t")[[1]][4] }))
 
+## try the reverse complement
+tmp.rc <- .Call("rev_complement", exons[[1]])
+
 ## to set suitable attributes:
 transcripts <- lapply( 1:length(exons), function(i){
     list('id'=sub("^>", "", names(exons)[i]), 'db'=exon.dbs[i], 'sp'=sub("([^_]+)_([^_]+)_.+$", "\\1 \\2", exon.dbs[i]),

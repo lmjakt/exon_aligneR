@@ -16,10 +16,10 @@ The alignments will be implemented in C.
 ### Compilation
 
 ```sh
-R CMD SHLIB exon_aligneR.c needleman_wunsch.c
+R CMD SHLIB exon_aligneR.c needleman_wunsch.c util.c
 
 ## or for more speed ?
-MAKEFLAGS="CFLAGS=-O3" R CMD SHLIB exon_aligneR.c needleman_wunsch.c
+MAKEFLAGS="CFLAGS=-O3" R CMD SHLIB exon_aligneR.c needleman_wunsch.c util.c
 ```
 
 ### Loading of library

@@ -326,4 +326,6 @@ align.print <- function( al, w ){
     }
 }
 
-
+rev.comp <- function(seq){
+    .Call("rev_complement", seq)
+}

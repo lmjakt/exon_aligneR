@@ -5,6 +5,7 @@
 #include <string.h>
 #include <pthread.h>
 #include "needleman_wunsch.h"
+#include "util.h"
 
 // This is a rewrite of exon_aligneR.c
 // Modified to:
@@ -1056,12 +1057,36 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   return( ret_data );
 }
 
+SEXP reverse_complement(SEXP seq){
+  if( TYPEOF(seq) != STRSXP || length(seq) < 1 )
+    error("A single character vector containing at least one element should be specified");
+  
+  int l = length(seq);
+
+  unsigned char *complement = make_complement();
+  SEXP ret_data = PROTECT(allocVector(STRSXP, l));
+  
+  for(int i=0; i < l; ++i){
+    unsigned char *comp = rev_complement( (const unsigned char*)CHAR(STRING_ELT(seq, i)), 
+					  0, complement );
+    if(comp){
+      SET_STRING_ELT( ret_data, i, mkChar((const char*)comp) );
+      free(comp);
+    }
+  }
+  free(complement);
+  UNPROTECT(1);
+  return( ret_data );
+}
+  
+
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
   {"align_seqs_mt", (DL_FUNC)&align_seqs_mt, 9},
   {"nucl_align_stats", (DL_FUNC)&nucl_align_stats, 1},
   {"sw_aligns", (DL_FUNC)&smith_waterman_r, 9},
+  {"rev_complement", (DL_FUNC)&reverse_complement, 1},
   {NULL, NULL, 0}
 };
 

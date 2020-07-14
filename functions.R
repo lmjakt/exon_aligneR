@@ -279,7 +279,7 @@ plot.exon.alignments <- function(al, i.sep=1.25, g.height=6, h1=1, w.radius=4, w
 ##     (2,1) => draw underneath y2
 ##     (2,2) => draw above y2
 draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, w.sd=w.radius/2, sim.h=h1*0.75, sim.sep=h1*0.125,
-                        sim.pos=c(1,1), border=cols){
+                        sim.pos=c(1,1), border=cols, id.lwd=1){
     krn <- dnorm( -w.radius:w.radius, sd=w.sd )
     if(is.character(al$seq)){
         a.seq <- strsplit( al$seq[1], '' )[[1]]
@@ -304,9 +304,9 @@ draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, 
     ## sim always has a maximum of 1.
     sim.y.base <- ifelse( sim.pos[1] == 1, y1, y2 )
     sim.y <- sim.y.base + ifelse( sim.pos[2] == 1,  -(sim.h + sim.sep), (h1 + sim.sep) )
-    lines( (x1+x2)/2, sim.y + sim * sim.h )
-    segments( 0.5, sim.y, length(a.seq)-0.5, sim.y )
-    segments( (x1+x2)/2, sim.y, (x1+x2)/2, sim.y + ifelse( a.seq == b.seq, sim * sim.h, 0 ) )
+    lines( (x1+x2)/2, sim.y + sim * sim.h, lwd=id.lwd )
+    segments( 0.5, sim.y, length(a.seq)-0.5, sim.y, lwd=id.lwd )
+    segments( (x1+x2)/2, sim.y, (x1+x2)/2, sim.y + ifelse( a.seq == b.seq, sim * sim.h, 0 ), lwd=id.lwd )
     if(!is.null(sp.a) || !is.null(sp.b))
         text( 0, y2, paste(sp.a, "vs", sp.b), adj=c(0,1.2) )
 }

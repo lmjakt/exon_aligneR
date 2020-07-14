@@ -281,8 +281,13 @@ plot.exon.alignments <- function(al, i.sep=1.25, g.height=6, h1=1, w.radius=4, w
 draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, w.sd=w.radius/2, sim.h=h1*0.75, sim.sep=h1*0.125,
                         sim.pos=c(1,1), border=cols){
     krn <- dnorm( -w.radius:w.radius, sd=w.sd )
-    a.seq <- strsplit( al$seq[1], '' )[[1]]
-    b.seq <- strsplit( al$seq[2], '' )[[1]]
+    if(is.character(al$seq)){
+        a.seq <- strsplit( al$seq[1], '' )[[1]]
+        b.seq <- strsplit( al$seq[2], '' )[[1]]
+    }else{
+        a.seq <- strsplit( al$seq[[1]][1], '' )[[1]]
+        b.seq <- strsplit( al$seq[[1]][2], '' )[[1]]
+    }
     sim <- sapply( 1:length(a.seq), function(i){
         b <- ifelse( i > w.radius, i - w.radius, 1 )
         e <- ifelse( i + w.radius <= length(a.seq), i + w.radius, length(a.seq) )

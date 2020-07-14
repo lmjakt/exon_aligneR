@@ -604,3 +604,13 @@ plot.new()
 plot.window( xlim=c(0,nchar(exon.i[16])), ylim=c(0, nchar(exon.i[1])), asp=1 )
 rect(0, 0, nchar(exon.i[16]), nchar(exon.i[1]))
 segments( sw.aligns[[3]][,3], sw.aligns[[3]][,1], sw.aligns[[3]][,4], sw.aligns[[3]][,2], col=hsvScale(sw.aligns[[3]][,5]), lwd=3 )
+
+
+### try the local.score function.
+
+seq <- c("ACTAGAAIAA-----ACAT",
+         "AC-GGAAI--AA---ACAT")
+
+local.score( seq, 3L, -8L, sub.matrix )
+
+plot(local.score( seq, 3L, -8L, sub.matrix ), type='b')

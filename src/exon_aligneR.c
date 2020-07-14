@@ -1078,7 +1078,53 @@ SEXP reverse_complement(SEXP seq){
   UNPROTECT(1);
   return( ret_data );
 }
+
+// It would be better to wrap up some of these into combined data structs
+// in order to have a nicer call.
+SEXP local_score_R(SEXP seq_r, SEXP radius_r, SEXP gap_r,
+		   SEXP sub_matrix_r, SEXP al_offset_r, SEXP al_size_r)
+{
+  if(TYPEOF(seq_r) != STRSXP || length(seq_r) != 2)
+    error("seq_r should be a character vector of length 2");
+  if(TYPEOF(radius_r) != INTSXP || TYPEOF(gap_r) != INTSXP || TYPEOF(sub_matrix_r) != INTSXP
+     || TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP)
+    error("All arguments except seq_r should be integer types");
+  if( length(radius_r) != 1 || length(gap_r) != 1 || length(al_offset_r) != 1 
+      || length(al_size_r) != 1)
+    error("All integer vectors except the sub_matrix_r should have length 1");
   
+  int al_offset = asInteger(al_offset_r);
+  int al_size = asInteger(al_size_r);
+  int gap = asInteger(gap_r);
+
+  SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
+  int nrow = INTEGER(sub_matrix_dims)[0];
+  int ncol = INTEGER(sub_matrix_dims)[1];
+
+  if(nrow != ncol || nrow != al_size)
+    error("The substitution matrix should be square and cover the complete alphabet");
+  
+  int *sub_matrix = INTEGER( sub_matrix_r );
+  int radius = asInteger( radius_r );
+
+  const char *a_seq = CHAR( STRING_ELT( seq_r, 0 ));
+  const char *b_seq = CHAR( STRING_ELT( seq_r, 1 ));
+  
+  size_t a_length = strlen(a_seq);
+  size_t b_length = strlen(b_seq);
+
+  if(a_length != b_length || a_length < 1 || a_length < (radius * 2 + 1))
+    error("The alignment length should be at least 2 * radius + 1");
+  
+  SEXP ret_data = PROTECT(allocVector(REALSXP, a_length));
+  double *scores = REAL(ret_data);
+  
+  local_score(a_seq, b_seq, radius,
+	      gap, sub_matrix, al_offset, al_size, scores, a_length);
+
+  UNPROTECT(1);
+  return(ret_data);
+}
 
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
@@ -1087,6 +1133,7 @@ static const R_CallMethodDef callMethods[] = {
   {"nucl_align_stats", (DL_FUNC)&nucl_align_stats, 1},
   {"sw_aligns", (DL_FUNC)&smith_waterman_r, 9},
   {"rev_complement", (DL_FUNC)&reverse_complement, 1},
+  {"local_score_R", (DL_FUNC)&local_score_R, 6},
   {NULL, NULL, 0}
 };
 

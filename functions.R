@@ -329,3 +329,8 @@ align.print <- function( al, w ){
 rev.comp <- function(seq){
     .Call("rev_complement", seq)
 }
+
+local.score <- function(al.seq, radius, gap, sub.matrix){
+    .Call("local_score_R", al.seq, radius, gap, sub.matrix$sm,
+          sub.matrix$offset, sub.matrix$size)
+}

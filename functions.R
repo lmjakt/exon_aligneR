@@ -298,8 +298,8 @@ draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, 
     ## then draw our rectangles using the colours specified
     x2 <- 1:length(a.seq)
     x1 <- x2 - 1
-    rect(x1, y1, x2, y1+h1, col=cols[ a.seq ], border=border[a.seq])
-    rect(x1, y2, x2, y2+h1, col=cols[ b.seq ], border=border[b.seq])
+    rect(x1, y1, x2, y1+h1, col=cols[ a.seq ], border=border[a.seq], lend=2, ljoin=1)
+    rect(x1, y2, x2, y2+h1, col=cols[ b.seq ], border=border[b.seq], lend=2, ljoin=1)
     ## then we plot the similarity beneath y1, and at 
     ## sim always has a maximum of 1.
     sim.y.base <- ifelse( sim.pos[1] == 1, y1, y2 )
@@ -313,7 +313,7 @@ draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, 
 
 ## al are two aligned sequences that ought to be the same size
 ## though we will make use of the first one
-align.print <- function( al, w ){
+align.print <- function( al, w, off.1=1, off.2=1 ){
     nc <- max(nchar(al[1:2]))
     if(length(al) > 1 && is.finite(nc)){
         beg <- seq(1, nc, w)
@@ -322,10 +322,14 @@ align.print <- function( al, w ){
             s2 <- substr(al[2], b, b+w)
             s1.c <- strsplit(s1, '')[[1]]
             s2.c <- strsplit(s2, '')[[1]]
+            s1.w <- sum(s1.c != '-')
+            s2.w <- sum(s2.c != '-')
             id.line <- paste( ifelse( s1.c == s2.c, "|", " " ), collapse='' )
-            cat( sprintf("% 4d  %s\n", b, substr(al[1], b, b+w)) )
-            cat( sprintf("      %s\n", id.line) )
-            cat( sprintf("% 4d  %s\n", b, substr(al[2], b, b+w)) )
+            cat( sprintf("% 6d  %s\n", off.1, substr(al[1], b, b+w)) )
+            cat( sprintf("        %s\n", id.line) )
+            cat( sprintf("% 6d  %s\n", off.2, substr(al[2], b, b+w)) )
+            off.1 <- off.1 + s1.w
+            off.2 <- off.2 + s2.w
             cat("\n")
         }
     }

@@ -999,7 +999,7 @@ SEXP smith_waterman_r(SEXP a_seq_r, SEXP b_seq_r, SEXP al_offset_r, SEXP al_size
   struct sw_alignment *sw_align = 0;
   extract_sw_alignments(a_seq, b_seq,
 			ptr_table, score_table, a_l + 1, b_l + 1,
-			0, a_l+1, 0, b_l+1, &sw_align, min_score, min_width );
+			0, a_l+1, 0, b_l+1, &sw_align, min_width, min_score );
   //  Rprintf("and that returned");
   int aligns_n = 0;
   count_sw_alignments( sw_align, &aligns_n );
@@ -1126,6 +1126,94 @@ SEXP local_score_R(SEXP seq_r, SEXP radius_r, SEXP gap_r,
   return(ret_data);
 }
 
+// seq_r : two sequences, transcript, then genome sequence. transcript may have metacharacters (I)
+//         indicating positions of introns
+// sub_matrix_r : The substitution matrix as a square int matrix
+// al_offset_r  : the character offset of the alphabet represented in the matrix
+// al_size_r    : The size of the alphabet allowed
+// gap_r        : The gap insertion and extension penalties (should be negative!)
+// intron_r     : The penalty for a new intron..
+// use_ll_ptr   : use a linked list pointer table instead of bit pointer one
+SEXP transcript_to_genome_r(SEXP seq_r, SEXP sub_matrix_r, SEXP al_offset_r, SEXP al_size_r,
+			    SEXP gap_r, SEXP intron_r, SEXP use_ll_ptr_r){
+  if(TYPEOF(seq_r) != STRSXP || length(seq_r) != 2)
+    error("seq_r should be a character vector of length 2");
+  if(TYPEOF(sub_matrix_r) != INTSXP || !isMatrix(sub_matrix_r) )
+    error("sub_matrix_r should be a numeric matrix");
+  if(TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
+    error("al_offset_r and al_size_r must both be ints");
+  if(TYPEOF(gap_r) != INTSXP || length(gap_r) != 2 )
+    error("gap_r should be an integer vector of length 2 (insertion, extension)");
+  if(TYPEOF(intron_r) != INTSXP || length(intron_r) != 1)
+    error("intron_r should be a single integer");
+  if(TYPEOF(use_ll_ptr_r) != LGLSXP || length(use_ll_ptr_r) != 1)
+    error("use_ll_ptr_r should be a logical vector of length 1");
+
+  // make C-variables
+  int al_offset = asInteger(al_offset_r);
+  int al_size = asInteger(al_size_r);
+  SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
+  int nrow = INTEGER(sub_matrix_dims)[0];
+  int ncol = INTEGER(sub_matrix_dims)[1];
+  if(nrow != ncol || nrow != al_size)
+    error("faulty matrix dimensions: %d, %d should both be: %d", nrow, ncol, al_size);
+  int *sub_table = INTEGER( sub_matrix_r );
+
+  int tr_l = length( STRING_ELT( seq_r, 0 ));
+  const unsigned char *tr_seq = (const unsigned char*)CHAR( STRING_ELT( seq_r, 0 ));
+  int gen_l = length( STRING_ELT( seq_r, 1 ));
+  const unsigned char *gen_seq = (const unsigned char*)CHAR( STRING_ELT( seq_r, 1 ));
+
+  int *gap = INTEGER(gap_r);
+  int intron_p = asInteger(intron_r);
+  int use_ll_ptr = (int)asLogical(use_ll_ptr_r);
+
+  struct sw_alignment *align = 0;
+  if(use_ll_ptr){
+    align = align_transcript_to_genome( tr_seq, gen_seq, tr_l, gen_l, 
+					 gap[0], gap[1], intron_p,
+					 sub_table, al_offset, al_size, 'I' );
+  }else{
+    align = align_transcript_bitp(tr_seq, gen_seq, tr_l, gen_l,
+				  gap[0], gap[1], intron_p,
+				  sub_table, al_offset, al_size, 'I');
+  }
+    
+  // return
+  // pos (vector 6 elements, ranges (4), score, al_length)
+  // cigar (int matrix number of ops times 2 columns)
+  // seq (char with two elements; 
+  SEXP ret_data = PROTECT(allocVector(VECSXP, 3));
+  const char* names[5] = {"pos", "cigar", "seq"};
+  SEXP names_r = PROTECT(allocVector(STRSXP, 3));
+  for(int i=0; i < 3; ++i)
+    SET_STRING_ELT(names_r, i, mkChar(names[i]));
+  setAttrib( ret_data, R_NamesSymbol, names_r );
+  UNPROTECT(1);
+  
+  //  SET_VECTOR_ELT( ret_data, 0, allocVector(INTSXP, 6)); // would be nice to name this as well
+  // make the first object a matrix to be the same as other align data structures
+  SET_VECTOR_ELT( ret_data, 0, allocMatrix(INTSXP, 1, 6)); // would be nice to name this as well
+  SET_VECTOR_ELT( ret_data, 1, allocMatrix(INTSXP, align->cigar_length, 2));
+  SET_VECTOR_ELT( ret_data, 2, allocVector(STRSXP, 2));
+
+  int *pos = INTEGER( VECTOR_ELT(ret_data, 0) );
+  int pos_ar[6] = {align->row_begin, align->row_end, align->col_begin, align->col_end, align->score, align->al_length};
+  for(int i=0; i < 6; ++i)
+    pos[i] = pos_ar[i];
+  int *cigar = INTEGER( VECTOR_ELT(ret_data, 1) );
+  SEXP al_seq = VECTOR_ELT( ret_data, 2 );
+  SET_STRING_ELT(al_seq, 0, mkChar(align->a_al));
+  SET_STRING_ELT(al_seq, 1, mkChar(align->b_al));
+  for(int i=0; i < align->cigar_length; ++i){
+    cigar[i] = (int)align->cigar_ops[i];
+    cigar[i + align->cigar_length] = align->cigar_n[i];
+  }
+  free_sw_alignments( align );
+  UNPROTECT(1);
+  return(ret_data);
+}
+
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
@@ -1134,6 +1222,7 @@ static const R_CallMethodDef callMethods[] = {
   {"sw_aligns", (DL_FUNC)&smith_waterman_r, 9},
   {"rev_complement", (DL_FUNC)&reverse_complement, 1},
   {"local_score_R", (DL_FUNC)&local_score_R, 6},
+  {"transcript_to_genome", (DL_FUNC)&transcript_to_genome_r, 7},
   {NULL, NULL, 0}
 };
 

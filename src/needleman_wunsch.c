@@ -658,115 +658,517 @@ struct transcript_alignment {
 // and al_size is the alphabet size
 // gap_i and gap_e are penalties for inserting and extending a gap
 // intron_loss is the penalty for a loss of an intron in the genome sequence.
-#if FALSE
-void align_transcript( struct transcript_alignment *tr_alignment,
-		       const char *tr_seq, const char *g_seq,
-		       int gap_i, int gap_e, int intron_loss, char intron_char,
-		       int *sub_table, int al_offset, int al_size )
-{
-  // We consider R-based matrix coordinates (column major) and that the tr_seq is vertical
-  // with the g_seq along the top.
-  // To find the coordinates of the highest scoring alignment we need only to keep track of the previous
-  // set of scores and alignment types; We will remember only the highest scoring cell for any given column
-  // along with the sum of the operations required to get to that cell.
-  // We also need to remember the starts and lenths of introns; For each of these maxima. But we only need
-  // to remember that for the highest scoring position.
+/* #if FALSE */
+/* void align_transcript( struct transcript_alignment *tr_alignment, */
+/* 		       const char *tr_seq, const char *g_seq, */
+/* 		       int gap_i, int gap_e, int intron_loss, char intron_char, */
+/* 		       int *sub_table, int al_offset, int al_size ) */
+/* { */
+/*   // We consider R-based matrix coordinates (column major) and that the tr_seq is vertical */
+/*   // with the g_seq along the top. */
+/*   // To find the coordinates of the highest scoring alignment we need only to keep track of the previous */
+/*   // set of scores and alignment types; We will remember only the highest scoring cell for any given column */
+/*   // along with the sum of the operations required to get to that cell. */
+/*   // We also need to remember the starts and lenths of introns; For each of these maxima. But we only need */
+/*   // to remember that for the highest scoring position. */
   
-  // First determine the number of introns;
-  int intron_n = 0;
-  size_t tr_seq_l = 0;
-  for( char nt=tr_seq; *nt > 0; nt++ ){
-    ++tr_seq_l;
-    if( *nt == intron_char )
-      ++intron_n;
-  }
-  int exon_n = intron_n + 1;
-  // these are the scores and the states associated with the previous column
-  // Since at the end we need to remember the beginnings and lengths of all
-  // potential introns we make a table for all of them
-  int *p_scores = malloc( sizeof(int) * (1 + tr_seq_l) );
-  char *p_ops = malloc( sizeof(char) * (1 + tr_seq_l) ); // see below for encoding
-  // how many insertions and deletions (referring to the transcript)
-  // for a given score;
-  // We need one per intron.. 
-  // and we probably need to keep track of the number of matches
-  // as well.. 
-  int *insert_n = malloc( sizeof(int) * tr_seq_l * intron_n);
-  int *delete_n = malloc( sizeof(int) * tr_seq_l * intron_n);
-  int *match_n =  malloc( sizeof(int) * tr_seq_l * intron_n);
+/*   // First determine the number of introns; */
+/*   int intron_n = 0; */
+/*   size_t tr_seq_l = 0; */
+/*   for( char nt=tr_seq; *nt > 0; nt++ ){ */
+/*     ++tr_seq_l; */
+/*     if( *nt == intron_char ) */
+/*       ++intron_n; */
+/*   } */
+/*   int exon_n = intron_n + 1; */
+/*   // these are the scores and the states associated with the previous column */
+/*   // Since at the end we need to remember the beginnings and lengths of all */
+/*   // potential introns we make a table for all of them */
+/*   int *p_scores = malloc( sizeof(int) * (1 + tr_seq_l) ); */
+/*   char *p_ops = malloc( sizeof(char) * (1 + tr_seq_l) ); // see below for encoding */
+/*   // how many insertions and deletions (referring to the transcript) */
+/*   // for a given score; */
+/*   // We need one per intron..  */
+/*   // and we probably need to keep track of the number of matches */
+/*   // as well..  */
+/*   int *insert_n = malloc( sizeof(int) * tr_seq_l * intron_n); */
+/*   int *delete_n = malloc( sizeof(int) * tr_seq_l * intron_n); */
+/*   int *match_n =  malloc( sizeof(int) * tr_seq_l * intron_n); */
 
-  // information about intron positions; also refer to the previous column
-  // of scores
-  int *intron_pos = malloc( sizeof(int) * tr_seq_l * intron_n );
-  int *intron_length = malloc( sizeof(int) * tr_seq_l * intron_n );
-  int *intron_i = malloc( sizeof(int) * tr_seq_l );
+/*   // information about intron positions; also refer to the previous column */
+/*   // of scores */
+/*   int *intron_pos = malloc( sizeof(int) * tr_seq_l * intron_n ); */
+/*   int *intron_length = malloc( sizeof(int) * tr_seq_l * intron_n ); */
+/*   int *intron_i = malloc( sizeof(int) * tr_seq_l ); */
 
-  // these should all be set to 0 to start with.
-  memset( (void*)p_scores, 0, sizeof(int) * (1 + tr_seq_l) );
-  memset( (void*)p_operations, 0, sizeof(char) * (1 + t_seq_l) );
-  memset( (void*)insert_n, 0, sizeof(int) * tr_seq_l * intron_n );
-  memset( (void*)delete_n, 0, sizeof(int) * tr_seq_l * intron_n );
-  memset( (void*)match_n, 0, sizeof(int) * tr_seq_l * intron_n );
-  memset( (void*)intron_pos, 0, sizeof(int) * tr_seq_l * intron_n );
-  memset( (void*)intron_length, 0, sizeof(int) * tr_seq_l * intron_n );
-  memset( (void*)intron_i, 0, sizeof(int) * tr_seq_l );
+/*   // these should all be set to 0 to start with. */
+/*   memset( (void*)p_scores, 0, sizeof(int) * (1 + tr_seq_l) ); */
+/*   memset( (void*)p_operations, 0, sizeof(char) * (1 + t_seq_l) ); */
+/*   memset( (void*)insert_n, 0, sizeof(int) * tr_seq_l * intron_n ); */
+/*   memset( (void*)delete_n, 0, sizeof(int) * tr_seq_l * intron_n ); */
+/*   memset( (void*)match_n, 0, sizeof(int) * tr_seq_l * intron_n ); */
+/*   memset( (void*)intron_pos, 0, sizeof(int) * tr_seq_l * intron_n ); */
+/*   memset( (void*)intron_length, 0, sizeof(int) * tr_seq_l * intron_n ); */
+/*   memset( (void*)intron_i, 0, sizeof(int) * tr_seq_l ); */
 
-  // The maximum score along the genomic locus
-  int max_score;
-  int max_i;     // (the index or position of the score)
-  int *max_insert_n = malloc(sizeof(int) * intron_n);
-  int *max_delete_n = malloc(sizeof(int) * intron_n);
-  int *max_intron_pos = malloc(sizeof(int) * intron_n);
-  int *max_intron_length = malloc(sizeof(int) * intron_n);
-  int max_intron_i;
+/*   // The maximum score along the genomic locus */
+/*   int max_score; */
+/*   int max_i;     // (the index or position of the score) */
+/*   int *max_insert_n = malloc(sizeof(int) * intron_n); */
+/*   int *max_delete_n = malloc(sizeof(int) * intron_n); */
+/*   int *max_intron_pos = malloc(sizeof(int) * intron_n); */
+/*   int *max_intron_length = malloc(sizeof(int) * intron_n); */
+/*   int max_intron_i; */
   
-  size_t g_seq_l = strlen( g_seq );
-  for(int i=0; i < g_seq_l; ++i){
-    int pp_score = 0;
-    int pp_op = 0;
-    for(int j=1; j <= tr_seq_l; ++j){
-      // Determine the score for the virtual cell in row j and column (i+1)
-      // based on the scores in insert_n;
-      int cell_max = 0;
-      int cell_op = 0;
-      // operations are: 
-      // insert (move down with gap)
-      // intron_insertion (move down, tr seqeunce is I), heavy penalty
-      // delete (move right with gap)
-      // intron (move right, tr sequence is I), no penalty
-      int ins_penalty = (tr_seq[j-1] == intron_char) ? intron_loss :
-	pp_ops == 1 ? gap_e : gap_i;
-      int del_penalty = (tr_seq[j-1] == intron_char) ? 0 :
-	p_ops[j] == 2 ? gap_e : gap_i;
-      int match_penalty = sub_table[ (g_seq[i]-al_offset) + (tr_seq[j] - al_offset) * al_size ];
-      if(p_scores[j-1] + ins_penalty > cell_max ){
-	cell_max = pp_score + ins_penalty;
-	cell_op = 1;
-      }
-      if(p_scores[j] + del_penalty > cell_max ){
-	cell_max = p_scores[j] + del_penalty;
-	cell_op = 2;
-      }
-      if(p_scores[j-1] + match_penalty > cell_max ){
-	cell_max = p_scores[j-1] + del_penalty;
-	cell_op = 4;
-      }
-      if( (tr_seq[j-1] == intron_char) )
-	cell_op |= 8;
-      p_scores[j] = cell_max;
-      p_ops[j] = cell_op;
-      pp_score = cell_max;
-      pp_op = cell_op;
-      // then update tha maximum and and all the counts;
-      if(cell_score == 0){  // no alignment cannot be maximal.. 
-	intron_i[j] = 0;
-	// the following is very wasteful and should not be necessary most of the
-	// time
-      }
+/*   size_t g_seq_l = strlen( g_seq ); */
+/*   for(int i=0; i < g_seq_l; ++i){ */
+/*     int pp_score = 0; */
+/*     int pp_op = 0; */
+/*     for(int j=1; j <= tr_seq_l; ++j){ */
+/*       // Determine the score for the virtual cell in row j and column (i+1) */
+/*       // based on the scores in insert_n; */
+/*       int cell_max = 0; */
+/*       int cell_op = 0; */
+/*       // operations are:  */
+/*       // insert (move down with gap) */
+/*       // intron_insertion (move down, tr seqeunce is I), heavy penalty */
+/*       // delete (move right with gap) */
+/*       // intron (move right, tr sequence is I), no penalty */
+/*       int ins_penalty = (tr_seq[j-1] == intron_char) ? intron_loss : */
+/* 	pp_ops == 1 ? gap_e : gap_i; */
+/*       int del_penalty = (tr_seq[j-1] == intron_char) ? 0 : */
+/* 	p_ops[j] == 2 ? gap_e : gap_i; */
+/*       int match_penalty = sub_table[ (g_seq[i]-al_offset) + (tr_seq[j] - al_offset) * al_size ]; */
+/*       if(p_scores[j-1] + ins_penalty > cell_max ){ */
+/* 	cell_max = pp_score + ins_penalty; */
+/* 	cell_op = 1; */
+/*       } */
+/*       if(p_scores[j] + del_penalty > cell_max ){ */
+/* 	cell_max = p_scores[j] + del_penalty; */
+/* 	cell_op = 2; */
+/*       } */
+/*       if(p_scores[j-1] + match_penalty > cell_max ){ */
+/* 	cell_max = p_scores[j-1] + del_penalty; */
+/* 	cell_op = 4; */
+/*       } */
+/*       if( (tr_seq[j-1] == intron_char) ) */
+/* 	cell_op |= 8; */
+/*       p_scores[j] = cell_max; */
+/*       p_ops[j] = cell_op; */
+/*       pp_score = cell_max; */
+/*       pp_op = cell_op; */
+/*       // then update tha maximum and and all the counts; */
+/*       if(cell_score == 0){  // no alignment cannot be maximal..  */
+/* 	intron_i[j] = 0; */
+/* 	// the following is very wasteful and should not be necessary most of the */
+/* 	// time */
+/*       } */
 
-    }
-  }
+/*     } */
+/*   } */
   
 
+/* } */
+/* #endif */
+
+// The following code replaces the transcript_align function above
+// through restructing the data into logical units..
+
+struct cig_op *init_cig_op(unsigned char op, struct cig_op *parent){
+  struct cig_op *node = malloc( sizeof(struct cig_op) );
+  node->parent = parent;
+  node->data = op; // ops are 1: left, 2 up, 3 diagonal
+  if(parent && op)
+    parent->data |= (1 << (1 + op));
+  return(node);
 }
-#endif
+
+unsigned char c_op(struct cig_op *co){
+  return(co->data & 3);
+}
+
+void clear_ops(struct cig_op *node, unsigned char op){
+  if(!node)
+    return;
+  unsigned char mask = (1 << (1+op));
+  if(op)
+    node->data &= (~mask);
+  // if any of bits 3-5 are set.. 
+  if(node->data & 0x1C) // some other cell pointing at this one
+    return;
+  if(node->parent)
+    clear_ops(node->parent, node->data & 3);
+  free(node);
+}
+
+
+struct cig_data *init_cig_data(unsigned int l){
+  struct cig_data *cd = malloc(sizeof(struct cig_data) * l);
+  memset( cd, 0, sizeof(struct cig_data) * l);
+  return(cd);
+}
+
+// clear the values in cd;
+// if no children, then also clear the cig_op linked list
+// if cd->max_score is better than best->max_score 
+// AND (op OR no children)
+//     copy cd -> best
+//     clear cd to 0
+//     do not clear the cig_ops
+//
+void clear_cig_data(struct cig_data *cd, struct cig_data *best){
+  if(cd->ops && (cd->ops->data >> 2 == 0) && cd->max_score <= best->max_score)
+    clear_ops(cd->ops, 0);
+  if(cd->max_score > best->max_score && (cd->ops->data >> 2 == 0)){
+    clear_ops(best->ops, 0);
+    memcpy(best, cd, sizeof(struct cig_data));
+    // and DO NOT clear cd->ops!
+  }
+  memset(cd, 0, sizeof(struct cig_data)); // this could be changed to a single memset op at the end of the inner loop
+}
+
+int extract_swi_alignment( struct cig_data *cd, const unsigned char *tr, const unsigned char *gen,
+					   struct sw_alignment *alignment){
+  // first find the top scoring position and then count from that:
+  // 1. How many distinct cigar operations are encoded
+  // 2. How many distinct moves from the top sc
+  struct cig_op *max_op = 0;
+  struct cig_op *op = cd->ops;
+  int pos_t = cd->pos_t;
+  int pos_g = cd->pos_g;
+  while(op && (pos_t > cd->max_t || pos_g > cd->max_g)){
+    // decrement pos_t & pos_g appropriately here
+    pos_t -= (op->data & 2) ? 1 : 0;
+    pos_g -= (op->data & 1) ? 1 : 0;
+    op = op->parent;
+  }
+  // if not op at this point then something has gone decidedly wrong
+  if(!op){
+    Rprintf("Major error, extract swi_alignment obtained NULL op at alignment max\n");
+    return(1); 
+  }
+  if(pos_t != cd->max_t || pos_g != cd->max_g){
+    Rprintf("pos_t or pos_g has bad value\n");
+    return(2);
+  }
+  int op_n = 0;  // all operations
+  int op_dn = 0; // distinct operations
+  unsigned char last_op = 0;
+  max_op = op;
+  while(op){
+    op_n++;
+    op_dn += (last_op != (op->data & 3)) ? 1 : 0;
+    last_op = op->data & 3;
+    op = op->parent;
+  }
+  // then we can set up the structures that we need to hold the alignment;
+  alignment->score = cd->max_score;
+  // row and column are one plus the position; 
+  alignment->row_begin = cd->beg_t + 1;
+  alignment->row_end = cd->max_t + 1;
+  alignment->col_begin = cd->beg_g + 1;
+  alignment->col_end = cd->max_g + 1;
+  alignment->al_length = op_n;
+  alignment->a_al = malloc( op_n + 1 );
+  alignment->b_al = malloc( op_n + 1 );
+  alignment->a_al[op_n] = 0;
+  alignment->b_al[op_n] = 0;
+  alignment->cigar_length = op_dn;
+  alignment->cigar_n = malloc(op_dn * sizeof(int));
+  memset( alignment->cigar_n, 0, sizeof(int) * op_dn);
+  alignment->cigar_ops = malloc(op_dn);
+  alignment->top = 0;
+  alignment->bottom = 0;
+  // then simply go through and set values appropriately
+  op = max_op;
+  last_op = 0;
+  while(op){
+    op_n--;
+    // the following is not the most efficient way as
+    // we end up with more conditionals than necessary
+    // but it seems easier to understand
+    alignment->a_al[op_n] = (op->data & 2) ? tr[pos_t] : '-';
+    alignment->b_al[op_n] = (op->data & 1) ? gen[pos_g] : '-';
+    pos_t -= (op->data & 2) ? 1 : 0;
+    pos_g -= (op->data & 1) ? 1 : 0;
+    if(last_op != (op->data & 3)){
+      op_dn--;
+      alignment->cigar_ops[op_dn] = op->data & 3;
+    }
+    alignment->cigar_n[op_dn]++;
+    last_op = (op->data & 3);
+    op = op->parent;
+  }
+  return(0);
+}
+
+
+struct sw_alignment *align_transcript_to_genome( const unsigned char *tr, const unsigned char *gen,
+						int tr_l, int gen_l, int gap_i, int gap_e, int intron_p,
+						int *sub_table, int al_offset, int al_size, char intron_char){
+  int al_buffer_size = 32;
+  int left_max_gap = -1 * (1 + abs(intron_p - gap_i) / gap_e);
+  // use to allow long gaps upwards as well... necessary if an alignment has sequence that doesn't fit..
+  // left gap insertion penalties are 0 after left_max_gap operations.
+  // to introns. 
+  // We need to have a vector of cig_data the same size as the transcript. We will
+  // trust that we have the correct size of these.
+  // this represents the current alignments, so we will call it aligns
+  struct cig_data *left = init_cig_data( (unsigned int)tr_l + 1 );
+  struct cig_data *right = init_cig_data( (unsigned int)tr_l + 1 );
+  struct cig_data best_alignment;
+  memset(&best_alignment, 0, sizeof(struct cig_data));
+  // everything starts of as zero
+  for(int g_i=0; g_i < gen_l; ++g_i){
+    for(int tr_i=0; tr_i < tr_l; ++tr_i){
+      int row = tr_i + 1;
+      // The offset that gives us the match / mismatch penalty
+      int m_score_o = (tr[tr_i] - al_offset) + (gen[g_i] - al_offset) * al_size;
+      unsigned int left_op = left[row].ops ? left[row].ops->data & 3 : 0;
+      unsigned int up_op = right[row-1].ops ? right[row-1].ops->data & 3 : 0;
+      // left scores never decrease below (score - intron_p)
+      // the lengt of a left gap affects the diagonal score rejoining an alignment
+      // if we have more than left.n consecutive gap positions then we do not penalise further extension.
+      int left_score = left[row].score + ((left_op & 3) == 1 ? gap_e : (left[row].left_n > left_max_gap ? 0 : gap_i));
+      int up_score = right[row-1].score + ((up_op & 3) == 2 ? gap_e : (right[row-1].up_n > left_max_gap ? 0 : gap_i));
+      // we might want to consider modifying the diagonal score if the previous character of the
+      // transcript was an intron character; possibly to penalise introns that are too short! We could also
+      // set a penalty here based on the intron end characters (eg. GT-AC, AT-AC, and so on to avoid
+      // incorrectly spliced ones... 
+      int diag_score = left[row-1].score + sub_table[ m_score_o ];
+      // we might want to make left_score and diag_score have no penaties at all if we are on an intron row
+      // although, arguably, maybe the up_score should be the intron_penalty as not having an intron here
+      // is the same as having lost one..
+      //      Rprintf("%d  %d  %d  %d\n", best_alignment.score, left_score, up_score, diag_score);
+      if(tr[tr_i] == intron_char){
+	up_score = right[row-1].score + intron_p;  // new intron
+	left_score = left[row].score;  // no penalty at all.. this is the novelty in this alignment.
+	diag_score = left[row-1].score; // no penalty at all. We have to join in some way.. 
+      }
+      // We could also consider to modify the diagonal score so that rejoining from an intron will take
+      // an indel based penalty if the gap is too small for the intron.
+      // The default value is 0, with no cigar...
+      int scores[4] = {0, left_score, up_score, diag_score};
+      struct cig_data *parents[4] = {0, left+row, right+row-1, left+row-1};
+      int max_i = 0;
+      struct cig_op *parent = 0;
+      for(int i=1; i < 4; ++i)
+	max_i = (scores[i] > scores[max_i]) ? i : max_i;
+      // if max_i is 0, then we don't actually need to do very much as it has no information
+      //      Rprintf("tr_i: %d tr_l: %d row: %d  gen: %d\n ", tr_i, tr_l, row, g_i);
+      if(max_i == 0){
+	memset( right + row, 0, sizeof(struct cig_data) );
+      }else{
+	// most of the fields should default to the parent one
+	memcpy(right + row, parents[max_i], sizeof(struct cig_data));
+	right[row].ops = init_cig_op(max_i, parents[max_i]->ops);
+	right[row].score = scores[max_i];
+	// if the first one; that is the parent is empty
+	if(parents[max_i]->ops == 0){
+	  right[row].beg_t = tr_i;
+	  right[row].beg_g = g_i;
+	}
+	if(right[row].score > right[row].max_score){
+	  right[row].max_score = right[row].score;
+	  right[row].max_t = tr_i;
+	  right[row].max_g = g_i;
+	}
+	if(max_i == 1)
+	  right[row].left_n = parents[max_i]->left_n + 1;
+	else
+	  right[row].left_n = 0;
+	if(max_i == 2)
+	  right[row].up_n = parents[max_i]->up_n + 1;
+	else
+	  right[row].up_n = 0;
+      }
+      // we always set the positions of the cig_data
+      right[row].pos_t = tr_i;
+      right[row].pos_g = g_i;
+      // Clear the data from above left if no children
+      clear_cig_data(&left[row-1], &best_alignment);
+    }
+    //    Rprintf("Got here, clearing tr_l\n");
+    clear_cig_data(&left[tr_l], &best_alignment);
+    // swap left and right
+    struct cig_data *tmp = left;
+    left = right;
+    right = tmp;
+  }
+  // and go through the last column, clearing every element. Note at this point the
+  // last column is left as they are swapped at the end. 
+  for(int row=1; row <= tr_l; ++row)
+    clear_cig_data( &left[row], &best_alignment );
+  // Free up left and right:
+  free(left);
+  free(right);
+  // Now the best alignment should be present in the best_alignment and we can extract that
+  struct sw_alignment *alignment = malloc(sizeof(struct sw_alignment));
+  memset(alignment, 0, sizeof(struct sw_alignment));
+  int error = extract_swi_alignment(&best_alignment, tr, gen, alignment);
+  clear_ops( best_alignment.ops, 0 );
+  return(alignment);
+}
+
+struct bit_ptr init_bit_ptr(unsigned int nrow, unsigned int ncol){
+  struct bit_ptr ptr;
+  ptr.nrow=nrow;
+  ptr.ncol=ncol;
+  unsigned int ptr_n = nrow * ncol;
+  unsigned int n_bytes = (ptr_n % 4) ? 1 + ptr_n / 4 : ptr_n / 4;
+  ptr.data = malloc( ptr_n );
+  memset(ptr.data, 0, ptr_n );
+  return(ptr);
+}
+
+void free_bit_ptr(struct bit_ptr *ptr){
+  free( ptr->data );
+}
+
+// seems like this would be a good time to define a macro or inline function
+unsigned char get_ptr(struct bit_ptr *ptr, unsigned int row, unsigned int col){
+  size_t o = row + col * ptr->nrow;
+  return( 3 & ptr->data[ o / 4 ] >> 2 * (o % 4) );
+}
+
+void set_ptr(struct bit_ptr *ptr, unsigned int row, unsigned int col, unsigned char val){
+  // the simple expression is:
+  size_t o = row + col * ptr->nrow;
+  ptr->data[ o / 4 ] |= (val << 2 * (o % 4) );
+  // but this only works if the original ptr data is 0, otherwise it's not a setting operation.
+}
+
+int extract_bitp_alignment( const unsigned char *tr, const unsigned char *gen, 
+			    struct bit_ptr *ptr, int max_row, int max_col, int score,
+			    struct sw_alignment *al){
+  // First count the number of operations needed to store the data;
+  int op_n = 0; // total number of operations
+  int dop_n = 0; // number of distinct operations
+  unsigned char op = 0;
+  unsigned char last_op = 0;
+  int row = max_row;
+  int col = max_col;
+  while( (op = get_ptr(ptr, row, col)) ){
+    op_n++;
+    if(op != last_op)
+      dop_n++;
+    if(op & 1)
+      col--;
+    if(op & 2)
+      row--;
+    last_op = op;
+  }
+  al->a_al = malloc(op_n + 1);
+  al->b_al = malloc(op_n + 2);
+  al->a_al[op_n] = 0;
+  al->b_al[op_n] = 0;
+  al->score = score;
+  al->row_begin = row+1;
+  al->row_end = max_row;
+  al->col_begin = col+1;
+  al->col_end = max_col;
+  al->al_length = op_n;
+  al->cigar_length = dop_n;
+  al->cigar_ops = malloc(dop_n);
+  al->cigar_n = malloc(sizeof(int) * dop_n);
+  memset( al->cigar_n, 0, sizeof(int) * dop_n);
+  al->top=0;
+  al->bottom=0;
+  // and then set the cigar and things appropriatly
+  row = max_row;
+  col = max_col;
+  last_op = 0;
+  op = 0;
+  // I should possibly be checking for a corrupted pointer table here
+  // but... 
+  while( (op = get_ptr(ptr, row, col)) && op_n > 0 ){
+    op_n--;
+    al->a_al[op_n] = (op & 2) ? tr[row-1] : '-';
+    al->b_al[op_n] = (op & 1) ? gen[col-1] : '-';
+    if(op != last_op){
+      dop_n--;
+      al->cigar_ops[dop_n] = op;
+    }
+    al->cigar_n[dop_n]++;
+    if(op & 1)
+      col--;
+    if(op & 2)
+      row--;
+    last_op = op;
+  }
+  return(0);
+}
+
+struct sw_alignment *align_transcript_bitp(const unsigned char *tr, const unsigned char *gen,
+					   int tr_l, int gen_l, int gap_i, int gap_e, int intron_p,
+					   int *sub_table, int al_offset, int al_size, char intron_char)
+{
+  int intron_gap_max = -1 * (1 + abs(intron_p - gap_i) / gap_e);
+  int *left_scores = malloc(sizeof(int) * (tr_l + 1));
+  int *right_scores = malloc(sizeof(int) * (tr_l + 1));
+  memset(left_scores, 0, sizeof(int) * (tr_l + 1));
+  memset(right_scores, 0, sizeof(int) * (tr_l + 1));
+  // I may at some point make the left_scores and right_scores into data structures that also
+  // contain the starting point of the alignment and the counts of current left or up ptrs
+  // to modify the scoring;
+  int *left_count = malloc(sizeof(int) * (tr_l + 1));
+  int *up_count = malloc(sizeof(int) * (tr_l + 1));
+  memset(left_count, 0, sizeof(int) * (tr_l + 1));
+  memset(up_count, 0, sizeof(int) * (tr_l + 1));
+  // and the pointers.. 
+  struct bit_ptr ptr = init_bit_ptr( tr_l + 1, gen_l + 1);
+  // and the maximum position;
+  int max_score = 0;
+  int max_col = 0;
+  int max_row = 0;
+  // This should be enough...
+  for(int g_i=0; g_i < gen_l; ++g_i){
+    int col = g_i + 1;
+    for(int tr_i=0; tr_i < tr_l; ++tr_i){
+      int row = tr_i + 1;
+      // then set right_scores[i]
+      // and update left_count and up_count to indicate the previous count..
+      int m_score_o = (tr[tr_i] - al_offset) + (gen[g_i] - al_offset) * al_size;
+      // I might not need these pointers since I have the counts, let me think..
+      
+      int left_score = left_scores[row] + (left_count[row] == 0) ? gap_i : (left_count[row] < intron_gap_max ? gap_i : 0);
+      int up_score = right_scores[row-1] + (up_count[row-1] == 0) ? gap_i : (up_count[row-1] < intron_gap_max ? gap_i : 0);
+      int diag_score = left_scores[row-1] + sub_table[ m_score_o ];
+
+      // intron character only allowed in tr
+      if(tr[tr_i] == intron_char){
+	up_score = right_scores[row-1] + intron_p;  // new intron
+	left_score = left_scores[row];  // no penalty at all.. this is the novelty in this alignment.
+	diag_score = left_scores[row-1]; // no penalty at all. We have to join in some way.. 
+      }
+      int scores[4] = {0, left_score, up_score, diag_score};
+      int max_i = 0;
+      for(int i=1; i < 4; ++i)
+	max_i = (scores[i] > scores[max_i]) ? i : max_i;
+      // and then simply:
+      left_count[row] = (max_i == 1) ? left_count[row] + 1 : 0;
+      up_count[row] = (max_i == 2) ? up_count[row] + 1 : 0;
+      right_scores[row] = scores[max_i];
+      set_ptr( &ptr, row, col, (unsigned char)max_i );
+      // update the maximum if appropriate;
+      if(right_scores[row] > max_score){
+	max_score = right_scores[row];
+	max_col = col;
+	max_row = row;
+      }
+    }
+    int *tmp = left_scores;
+    left_scores = right_scores;
+    right_scores = tmp;
+  }
+  struct sw_alignment *alignment = malloc(sizeof(struct sw_alignment));
+  memset(alignment, 0, sizeof(struct sw_alignment));
+  int error = extract_bitp_alignment( tr, gen, &ptr, max_row, max_col, max_score, alignment);
+  // clear all the allocated memory:
+  free(left_scores);
+  free(right_scores);
+  free(left_count);
+  free(up_count);
+  free_bit_ptr(&ptr);
+  return(alignment);
+}

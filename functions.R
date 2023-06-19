@@ -78,6 +78,32 @@ make.sub.matrix <- function( al.offset=33, al.size=64, letters=c('A', 'C', 'T', 
     list('offset'=as.integer(al.offset), 'size'=as.integer(al.size), 'sm'=m)
 }
 
+## m should be a square matrix with colnames and rownames indicating
+## the residue names (as single characters !
+## note that rownames should be equal to colnames
+make.sub.matrix.from.table  <- function(m){
+    r.nm  <- rownames(m)
+    c.nm  <- colnames(m)
+    if(any( r.nm != c.nm ))
+        stop("Rownames should be the same as the column names" )
+    if(any( nchar(r.nm) != 1 ))
+        stop("Rownames and column names should be single characters")
+    nm  <- utf8ToInt( paste(r.nm, collapse="") )
+    if(max(nm) > 127)
+        stop("Only ASCII characters supported")
+    offset  <- min(nm)
+    al.size  <- 1 + max(nm) - offset
+    sc.m  <- matrix(0, nrow=al.size, ncol=al.size)
+    for(i in 1:length(nm)){
+        for(j in 1:length(nm)){
+            sc.m[ 1 + nm[i]-offset, 1 + nm[j]-offset ]  <- m[i,j]
+        }
+    }
+    ## because R does its damndest to convert everything to float..
+    sc.m  <- matrix(as.integer(sc.m), nrow=nrow(sc.m))
+    list('offset'=as.integer(offset), 'size'=as.integer(al.size), 'sm'=sc.m)
+}
+
 align.seqs <- function(a, b, al.offset, al.size,
                        sub.matrix=make.sub.matrix(al.offset=al.offset, al.size=al.size),
                        gap=as.integer(c(-10, -1)), tgaps.free=TRUE, sp.char="I"){
@@ -129,8 +155,9 @@ align.mt.to.stats <- function( al ){
 
 ### Get local alignments
 
-local.aligns <- function( a, b, al.offset, al.size, sub.matrix, gap, min.width, min.score,
-                         keep.scores=FALSE){
+local.aligns <- function( a, b, al.offset=sm$offset, al.size=sm$size, sub.matrix=sm$sm,
+                         gap, min.width, min.score,
+                         keep.scores=FALSE, sm=NULL){
     sw <- .Call("sw_aligns", a, b, as.integer(al.offset), as.integer(al.size), sub.matrix,
                 as.integer(gap), as.integer(min.width), as.integer(min.score), keep.scores)
     if(length(sw$cigar)){

@@ -135,4 +135,122 @@ void harvest_sw_aligns( struct sw_alignment *align, int *align_table,
 			char **a_al, char **b_al);
 
 
+
+// Aligning transcripts to genome locations with intron position
+// hinting
+// There are a number of problems with alignment to genomic locations:
+// 1. The genomic region is too long to remember all scores and pointers.
+//    This can be overcome by only remembering the previous column of scores
+//    (genome sequence along the top of the matrix) and the alignments associated
+//    with each score. The alignments can be encoded as cigar strings.
+// 2. The score associated with horizontal moves can either indicate indels
+//    or introns meaning that we need to keep track of two different scores until
+//    the intron associated score has a higher value. In theory one could simply
+//    have some function whereby the score goes up once the gap is long enough, but
+//    one will then risk getting negative scores and giving up on the alignment.
+//    Hence keeping two scores seems reasonable; any continuations to the alignment
+//    before an intron length is obtained will then be considered as an insertion.
+//    Continuations of the alignment after that may take into consideration the
+//    expected splicing signals; as indels in theory, even within exons can be longer than
+//    76 base pairs. Especially in terminal ones.
+
+// A structure that holds a pointer
+// needs to be a linked list with a reference count
+// to avoid copying operations.
+struct cig_op {
+  // 2 smallest bits hold the cigar operation; 
+  // left = 1, up = 2, diagnoal = 1 | 2 (3)
+  // the three bits after that hold the child information
+  // (i.e. which cells are pointing to this cell)
+  unsigned char data;
+  struct cig_op *parent;
+};
+
+// holds a pointer to a cig_op chain and some information about that chain
+// to allow the tracing of an alignment
+struct cig_data {
+  struct cig_op *ops;
+  int score;
+  // current position (i.e. the end of the operations)
+  int pos_t;
+  int pos_g;
+  // positions related to the alignment
+  int beg_t;
+  int beg_g;
+  // positions related to the peak;
+  int max_score;
+  int max_t;
+  int max_g;
+  // the number of consecutive left ops
+  int left_n;
+  int up_n;
+};
+
+// the constant mallocing of data is likely to be slow
+// as we have to do this every time we extend or start
+// a new alignment (and this willl be very frequently)
+// I have some ideas as to how I can do something more
+// efficiently, but we should try the straightforward way
+// first..
+struct cig_op *init_cig_op(unsigned char op, struct cig_op *parent);
+
+unsigned char c_op(struct cig_op *co);
+
+void clear_ops(struct cig_op *node, unsigned char op);
+
+// make a vector of cig_data structures
+// with all values set to 0
+struct cig_data *init_cig_data();
+
+// A matrix of DP pointers encoded as 2 bits in a byte
+// row minor (as in R)
+// ptr[0] is stored in the least signficant bit of a byte
+// note that a ptr can only be set once! This is to make the
+// the set_ptr operation faster. This may be changed in the future.
+struct bit_ptr {
+  unsigned char *data;
+  unsigned int nrow;
+  unsigned int ncol;
+};
+
+struct bit_ptr init_bit_ptr(unsigned int nrow, unsigned int ncol);
+void free_bit_ptr(struct bit_ptr *ptr);
+unsigned char get_ptr(struct bit_ptr *ptr, unsigned int row, unsigned int col);
+void set_ptr(struct bit_ptr *ptr, unsigned int row, unsigned int col, unsigned char val);
+
+// sw_alignment is actually intended to hold a linked list of
+// sw_alignment; however here we will use it to hold a single alignment
+// extractd from cig_data;
+// returns 0 on success
+int extract_swi_alignment( struct cig_data *cd, const unsigned char *tr, const unsigned char *gen,
+			   struct sw_alignment *alignment);
+
+int extract_bitp_alignment( const unsigned char *tr, const unsigned char *gen, 
+			    struct bit_ptr *ptr, int max_row, int max_col, int score,
+			    struct sw_alignment *alignment);
+
+// I haven't yet decided what this function should return.
+// It is expected that tr is a sequence of characters, one of which
+// represents introns (by default I). This should not be alignable to any
+// character but must be passed by gaps in the tr sequence (if intron is
+// specific to the transcript) or in the gen sequence (if they are shared).
+// In addition, introns specific to the genome may also exist; possibly
+// we should have some form of penalty for such introns, similar to ones
+// specific to the transcript.
+
+// The innovation in this function is to evaluate the impact of gaps on the score
+// at the point when the gap is joined; i.e. the gap is free until we try to align
+// characters again at which point we consider how to penalise the gap
+struct sw_alignment *align_transcript_to_genome( const unsigned char *tr, const unsigned char *gen,
+						int tr_l, int gen_l, int gap_i, int gap_e, int intron_p,
+						int *sub_table, int al_offset, int al_size, char intron_char );
+
+
+// a function to align making use of the bit_ptr
+// initially make it void; later on work out what return values to provide
+
+struct sw_alignment *align_transcript_bitp(const unsigned char *tr, const unsigned char *gen,
+					   int tr_l, int gen_l, int gap_i, int gap_e, int intron_p,
+					   int *sub_table, int al_offset, int al_size, char intron_char);
+
 #endif

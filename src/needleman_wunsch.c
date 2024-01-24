@@ -4,6 +4,8 @@
 #include "needleman_wunsch.h"
 #include <Rinternals.h>
 
+#define INTRON_TYPE_N 3
+
 // A very basic function that takes
 // two sequences
 // gap insertion penalty
@@ -902,7 +904,17 @@ int extract_swi_alignment( struct cig_data *cd, const unsigned char *tr, const u
   return(0);
 }
 
-
+// WARNING
+// This function may not work, or if it does, it is very slow
+// The function attemptes to keep cigar representations of alignments
+// as linked lists (to avoid keeping a table of the pointers for the full
+// alignment matrix). Not surprisingly, this turns out to be really computationally
+// expensive, and not really worth it.
+// It might be possible to make this work, through using preallocation and a specialised
+// memory mapper, but that is probably not worth it.
+// Instead, use the function further below: align_transcript_bitp()
+// Which simply uses two bits per cell and keeps the whole table. Not very elegant, but
+// works much faster.
 struct sw_alignment *align_transcript_to_genome( const unsigned char *tr, const unsigned char *gen,
 						int tr_l, int gen_l, int gap_i, int gap_e, int intron_p,
 						int *sub_table, int al_offset, int al_size, char intron_char){
@@ -1131,8 +1143,8 @@ struct sw_alignment *align_transcript_bitp(const unsigned char *tr, const unsign
       int m_score_o = (tr[tr_i] - al_offset) + (gen[g_i] - al_offset) * al_size;
       // I might not need these pointers since I have the counts, let me think..
       
-      int left_score = left_scores[row] + (left_count[row] == 0) ? gap_i : (left_count[row] < intron_gap_max ? gap_i : 0);
-      int up_score = right_scores[row-1] + (up_count[row-1] == 0) ? gap_i : (up_count[row-1] < intron_gap_max ? gap_i : 0);
+      int left_score = left_scores[row] + ((left_count[row] == 0) ? gap_i : (left_count[row] < intron_gap_max ? gap_e : 0));
+      int up_score = right_scores[row-1] + ((up_count[row-1] == 0) ? gap_i : (up_count[row-1] < intron_gap_max ? gap_e : 0));
       int diag_score = left_scores[row-1] + sub_table[ m_score_o ];
 
       // intron character only allowed in tr
@@ -1147,7 +1159,9 @@ struct sw_alignment *align_transcript_bitp(const unsigned char *tr, const unsign
 	max_i = (scores[i] > scores[max_i]) ? i : max_i;
       // and then simply:
       left_count[row] = (max_i == 1) ? left_count[row] + 1 : 0;
-      up_count[row] = (max_i == 2) ? up_count[row] + 1 : 0;
+      // up_count[row] + 1 --> up_count[row-1] + 1
+      // 19-06-23 lmj. Looks like previous version was a bug.
+      up_count[row] = (max_i == 2) ? up_count[row-1] + 1 : 0;
       right_scores[row] = scores[max_i];
       set_ptr( &ptr, row, col, (unsigned char)max_i );
       // update the maximum if appropriate;
@@ -1169,6 +1183,398 @@ struct sw_alignment *align_transcript_bitp(const unsigned char *tr, const unsign
   free(right_scores);
   free(left_count);
   free(up_count);
+  free_bit_ptr(&ptr);
+  return(alignment);
+}
+
+
+/* // returns the nth class */
+/* int check_intron_entry(const char *seq, const char **allowed, unsigned char n){ */
+/*   for(unsigned char i=0; i < n; ++i){ */
+/*     if(strncmp(seq, allowed[i], 2) == 0) */
+/*       return(i+1); */
+/*   } */
+/*   return(0); */
+/* } */
+
+/* // returns the nth class if intron merge is OK */
+/* // This may not be necessary if we remember which intron class we have entered. */
+/* // But for that we will need another set of variables. Unsigned char ?, with one for each */
+/* // entry...  */
+/* int check_intron_close(const char *seq1, const char *seq2, const char **allowed_start, const char **allowed_end, unsigned char n){ */
+/*   for(unsigned char i=0; i < n; ++i){ */
+/*     if(strncmp(seq1, allowed_start[i], 2) == 0 && strncmp(seq2, allowed_end[i]) == 0) */
+/*       return(i+1); */
+/*   } */
+/*   return(0); */
+/* } */
+
+int check_intron(const char *seq1, const char *seq2, const char **allowed_start, const char **allowed_end, unsigned char n){
+  for(unsigned char i=0; i < n; ++i){
+    if(strncmp(seq1, allowed_start[i], 2) == 0 && strncmp(seq2, allowed_end[i], 2) == 0)
+      return(i+1);
+  }
+  return(0);
+}
+
+// Contains two columns of scores, plus two columns of gap counts
+// for the current (right) and previous (left) columns of the positions
+// The vertical gap counts (sequence in transcript not in 
+struct al_info {
+  // pointers to the actual sequences
+  // and their lenghts.
+  const unsigned char *tr;
+  const unsigned char *gen;
+  unsigned int tr_l, gen_l;
+  // the character associated with an intron
+  char intron_char;
+  // The two column of scores; these get swapped at the
+  // end of an assignment
+  float *left_scores;
+  float *right_scores;
+  // For each of these vectors we also keep track of the number of the
+  // size of any gaps to the corresponding position.
+  // tr_gap corresponds to left arrows and are presumptive introns.
+  unsigned int *left_tr_gap, *right_tr_gap;
+  // gen_gap corresponds to up arrows and represent sequence in tr that
+  // is not aligned to the genome (insertions in the transcript).
+  // These are not expected but may be present if part of an exon is lost
+  // in the species of the genome sequence.
+  unsigned int *left_gen_gap, *right_gen_gap;
+  // gaps in genome sequence (up arrows) can cross intron positions in the transcript
+  // If they do we need to count them in order to apply the appropriate penalties. 
+  unsigned int *left_int_x, *right_int_x;
+};
+
+struct al_info init_al_info(const unsigned char *tr, const unsigned char *gen,
+			    unsigned int tr_l, unsigned int gen_l, char intron_char){
+  struct al_info al;
+  al.tr = tr;
+  al.gen = gen;
+  al.tr_l = tr_l;
+  al.gen_l = gen_l;
+  al.intron_char = intron_char;
+  // calloc clears the allocated memory setting it to 0.
+  // Note that this could be done with a single allocation
+  // of a block of memory from which we could take a subset.
+  al.left_scores = calloc( tr_l + 1, sizeof(float) );
+  al.right_scores = calloc( tr_l + 1, sizeof(float) );
+  al.left_tr_gap =  calloc( tr_l + 1, sizeof(unsigned int) );
+  al.right_tr_gap =  calloc( tr_l + 1, sizeof(unsigned int) );
+  al.left_gen_gap =  calloc( tr_l + 1, sizeof(unsigned int) );
+  al.right_gen_gap =  calloc( tr_l + 1, sizeof(unsigned int) );
+  // and the intron crosses for gen_gaps
+  // Note that these really _dont_ need to be 32 bit ints
+  al.left_int_x = calloc( tr_l + 1, sizeof(unsigned int) );
+  al.right_int_x = calloc( tr_l + 1, sizeof(unsigned int) );
+  return(al);
+}
+
+
+// It strikes me that we do not actually need to swap; 
+void swap_left_right( struct al_info *al ){
+  float *tmp = al->left_scores;
+  al->left_scores = al->right_scores;
+  al->right_scores = tmp;
+  unsigned int *utmp;
+  // tr gaps
+  utmp = al->left_tr_gap;
+  al->left_tr_gap = al->right_tr_gap;
+  al->right_tr_gap = utmp;
+  // gen gaps
+  utmp = al->left_gen_gap;
+  al->left_gen_gap = al->right_gen_gap;
+  al->right_gen_gap = utmp;
+  // int_x counts
+  utmp = al->left_int_x;
+  al->left_int_x = al->right_int_x;
+  al->right_int_x = utmp;
+}
+
+void free_al_info(struct al_info *al){
+  free( al->left_scores );
+  free( al->right_scores );
+  free( al->left_tr_gap );
+  free( al->right_tr_gap );
+  free( al->left_gen_gap );
+  free( al->right_gen_gap );
+  free( al->left_int_x );
+  free( al->right_int_x );
+}
+
+// A struct to hold the set of penalties that we wish to use:
+// defined in header file.
+/* struct al_penalty { */
+/*   int *sub_table; */
+/*   int al_offset; */
+/*   int al_size; */
+/*   char intron_char; */
+/*   float gap_i; */
+/*   // gap_e_mod modifies the extension: the bigger the cheaper the extension as it divides */
+/*   float gap_e_mod;  */
+/*   float fshift[3]; */
+/*   float intron_new; */
+/*   float intron_bad; */
+/*   int min_intron_size; */
+/*   // intron starts and ends: */
+/*   int intron_type_n; */
+/*   // precalculated cumulative gap values for 0 -> min_intron_size; */
+/*   // (size of array = min_intron_size + 1); */
+/*   float *gap; */
+/*   const char **intron_start; */
+/*   const char **intron_end; */
+/* }; */
+
+// this is just a holder; it should not allocate or free anything
+struct al_penalty init_al_penalty(int *sub_table, int al_offset, int al_size, char intron_char,
+				  float gap_i, float gap_e_mod, float fshift, float intron_new, float intron_bad, int min_intron_size,
+				  int intron_type_n, const char **intron_start, const char **intron_end
+				  ){
+  struct al_penalty pen;
+  pen.sub_table = sub_table;
+  pen.al_offset = al_offset;
+  pen.al_size = al_size;
+  pen.intron_char = intron_char;
+  pen.gap_i = gap_i;
+  pen.gap_e_mod = gap_e_mod;
+  pen.fshift[0] = -fshift;
+  pen.fshift[1] = fshift;
+  pen.fshift[2] = 0;
+  pen.intron_new = intron_new;
+  pen.intron_bad = intron_bad;
+  pen.min_intron_size = min_intron_size;
+  pen.intron_type_n = intron_type_n;
+  pen.intron_start = intron_start;
+  pen.intron_end = intron_end;
+  pen.gap = 0;
+  if(min_intron_size > 0){
+    pen.gap = malloc( sizeof(float) * (1 + min_intron_size));
+    pen.gap[0] = 0;
+    for(unsigned int i=1; i <= (unsigned int)min_intron_size; ++i)
+      pen.gap[i] = pen.gap[i-1] + gap_penalty(i, (float)min_intron_size, gap_i, gap_e_mod, pen.fshift);
+  }
+  return(pen);
+}
+
+void free_al_penalty(struct al_penalty *pen){
+  free(pen->gap);
+}
+ 
+// Individual functions to calculate the scores: left, up, diagonal
+// and gap-closing for horizontal gaps (potential introns)
+
+// gap_l can be either al->right_gen_gap or al->left_gen_gap depending on which cell is tested
+// row is the row from which the closing is done. Hence we check row-1, rather than row.
+// That is probably a bad choice as it conflicts with vertical_gap_close_penalty where the function
+// can't assume row-1 and the caller has to be explicit.
+static inline float horizontal_gap_close_penalty(struct al_info *al, struct al_penalty *pen, int row, unsigned int *gap_lengths, int g_i){
+  if(row < 2 || gap_lengths[row-1] < 6) 
+    return(0);
+  // we will make use of a bitwise flag with 3 bits defining the following:
+  // bit 1 : gap_l >= pen->min_intron_size
+  // bit 2 : preceding row was an intron
+  // bit 3 : intron_class > 0 (i.e. looks like a good intron)
+  unsigned int flag = 0;
+  unsigned int gap_l = gap_lengths[row-1];
+  flag |= (al->tr[row-2] == pen->intron_char);
+  flag |= ((gap_l >= pen->min_intron_size) << 1);
+  flag |= (check_intron(al->gen + g_i - gap_l, al->gen + g_i - 1, pen->intron_start, pen->intron_end, pen->intron_type_n) << 2);
+  // The flag represents the following table (Most significant bit first)
+  // intron_class   intron_size    intron_row     penalty             reason
+  //            0             0             0     0                  counts as normal gap: already calculatd
+  //            0             0             1     gap                current 0 penalty, but should count as normal gap
+  //            0             1             0     0                  counts as normal gap of intron_min_size; already calculated
+  //            0             1             1     intron_bad / gap   current cost 0, but doesn't look like intron
+  //            1             0             0     0                  doesn't look like intron, gap cost already included
+  //            1             0             1     intron_bad / gap   or some kind of function depending on gap_l
+  //            1             1             0     intron_new         looks like new intron
+  //            1             1             1     0                  looks like good intron
+  // Note that in some of these case we may need to return a negative number. 110 (intron class, size) should
+  // have a total penalty of intron_new, but will already have a gap penalty that may be larger than the
+  // than the intron_new penalty. And 001, or 011, should have a value for the gap length; that suggests
+  // that we should pre-calculate a gaps vector up to intron_min_size that we can use here.
+  float penalty = 0;
+  switch(flag){
+  case 0:  // 0 0 0
+    penalty = 0;
+    break;
+  case 1:  // 0 0 1
+    // intron row, but too short, 
+    penalty = 0;
+    //    penalty = pen->gap[ gap_l ];
+    break;
+  case 2:  // 0 1 0 intron_size only
+    penalty = 0;
+    break;
+  case 3:  // 0 1 1 intron row and intron_size, but bad beg / end
+    // penalty = 0;
+    penalty = pen->intron_bad;
+    //    penalty = pen->gap[ pen->min_intron_size ];
+    break;
+  case 4:  // 1 0 0 intron class only
+    penalty = 0;
+    break;
+  case 5:  // 1 0 1
+    // intron class, intron row, but too short? 
+    // penalty = 0;
+    penalty = pen->gap[ gap_l ];
+    break;
+  case 6:  // 1 1 0
+    // intron class, intron size, but not intron row
+    // provide a positive penalty (the others are 0 or negative)
+    penalty = 0;
+    //    penalty = pen->intron_new - pen->gap[ pen->min_intron_size ];
+    break;
+  case 7: // 1 1 1
+    // Everything looks like an intron !
+    penalty = 0;
+    break;
+  default:
+    penalty = 0; // should not be possible!
+  }
+  return(penalty);
+}
+
+// gap_l is the gap at this cell; not the previous one that is recorded!
+// fshift should be positive and should reduce the penalty as it should not accumulate
+// over the two first 
+// complains if I make this inline.. 
+static inline float gap_penalty(unsigned int gap_l, float min_is, float gap_i, float mod, float fshift[3]){
+  return( (gap_l == 1 ? gap_i : 0) + logf( (float)gap_l / min_is )/mod + fshift[gap_l % 3] );
+}
+
+float score_from_left(struct al_info *al, struct al_penalty *pen, int row){
+  // If we are on an intron row, then there is no penalty:
+  if( al->tr[row-1] == pen->intron_char || al->left_tr_gap[row] >= pen->min_intron_size)
+    return(al->left_scores[row]);
+  // hardcode these to start with as I need to change a load of other code:
+  return( al->left_scores[row] + gap_penalty( al->left_tr_gap[row] + 1, (float)pen->min_intron_size, 
+					      pen->gap_i, pen->gap_e_mod, pen->fshift) );
+}
+
+float score_from_above(struct al_info *al, struct al_penalty *pen, int row, int g_i){
+  return( al->right_scores[row-1] + 
+	  gap_penalty( al->right_gen_gap[row-1] + 1, (float)pen->min_intron_size, 
+		       pen->gap_i, pen->gap_e_mod, pen->fshift) +
+	  horizontal_gap_close_penalty(al, pen, row, al->right_tr_gap, g_i)
+	  );
+}
+
+// This will need to do the same checks for gap sequences as performed in score_from_left
+// and score_from_above. This suggest that I should refactor that code into their own
+// functions. Eg. check_vert_gap, check_horizontal_gap
+float score_from_above_left(struct al_info *al, struct al_penalty *pen, int row, int g_i){
+  // First get the substitution matrix score. Note that the we don't have to check for
+  // this row being a gap one as the substitution matrix will 
+  unsigned int tr_i = row - 1;
+  int m_score_o = (al->tr[tr_i] - pen->al_offset) + (al->gen[g_i] - pen->al_offset) * pen->al_size;
+  float diag_score = al->left_scores[row-1] + (float)pen->sub_table[ m_score_o ];
+  // add on penalties for vertical or gap_close_penalties; we could check if we need to do this before
+  // we call the functions to avoid the function call, but first let's just do it:
+  return( diag_score + // vertical_gap_close_penalty( al, pen, row-1 ) +
+	  horizontal_gap_close_penalty( al, pen, row, al->left_tr_gap, g_i-1 ));
+}
+ 
+// Like align_transcript_bitp, but splice site aware
+// Considers intron insertion to be free only when GT-AG, AT-AC, GC-AG
+// 
+// This uses gap-closing score calculation; that is gap penalties are
+// only calculated upon the closing of the gap. This will make this
+// implementation heuristic. To guarantee optimal scores we would need
+// to look back one more step, and that would still be problematic.
+// if global is non-0, then do a semi-global alignment (row 0 is 0,
+// col 0 is set according to gap extension rules, and alignment is taken from
+// the highest score in the last row).
+struct sw_alignment *align_transcript_bitp_ssa(const unsigned char *tr, const unsigned char *gen,
+					       int tr_l, int gen_l, float gap_i, float gap_e_mod, float fshift,
+					       float intron_new, float intron_bad, int min_intron_size,
+					       int *sub_table, int al_offset, int al_size, char intron_char,
+					       int global)
+{
+  struct al_info al = init_al_info(tr, gen, tr_l, gen_l, intron_char);
+  const unsigned char intron_type_n = INTRON_TYPE_N;
+  const char *intron_start[INTRON_TYPE_N] = {"GT", "AT", "GC"};
+  const char *intron_end[INTRON_TYPE_N] = {"AG", "AC", "AG"};
+  struct al_penalty pen = init_al_penalty(sub_table, al_offset, al_size, intron_char,
+					  gap_i, gap_e_mod, fshift, intron_new, intron_bad, min_intron_size,
+					  intron_type_n, intron_start, intron_end
+					  );
+  // the pointers.. 
+  struct bit_ptr ptr = init_bit_ptr( tr_l + 1, gen_l + 1);
+  // if global prepare the first column:
+  if(global){
+    for(int i=1; i <= tr_l; ++i){
+      al.left_scores[i] = score_from_above(&al, &pen, i, 0);
+      // note that score_from_above will call horizontal_gap_close_penalty with
+      // right_tr_gap as an argument. This is WRONG, but doesn't matter. However,
+      // future changes could cause a problem here.
+      al.left_gen_gap[i] = al.left_gen_gap[i-1] + 1;
+      set_ptr(&ptr, i, 0, (unsigned char)2);
+    }
+  }
+  // and the maximum position;
+  float max_score = 0;
+  int max_col = 0;
+  int max_row = 0;
+  // if doing a (semi) global analysis we need to find the max in the last row:
+  float last_row_max = al.left_scores[tr_l];
+  int last_row_max_col = 0;
+  // if we are doing a local alignment, then we need to include a 0 alternative:
+  int first_score_alt = global ? 1 : 0;
+  // This should be enough...
+  for(int g_i=0; g_i < gen_l; ++g_i){
+    int col = g_i + 1;
+    for(int tr_i=0; tr_i < tr_l; ++tr_i){
+      int row = tr_i + 1;
+      // left_count_prev[row] = left_count[row];
+      // m_score_o, is the offset in the substitution matrix
+      // int m_score_o = (tr[tr_i] - al_offset) + (gen[g_i] - al_offset) * al_size;
+      
+      float left_score = score_from_left(&al, &pen, row);
+      float up_score = score_from_above(&al, &pen, row, g_i);
+      float diag_score = score_from_above_left(&al, &pen, row, g_i);
+
+      float scores[4] = {0, left_score, up_score, diag_score};
+      int max_i = first_score_alt;
+      for(int i=first_score_alt + 1; i < 4; ++i)
+	max_i = (scores[i] > scores[max_i]) ? i : max_i;
+      // If 3 or 0, then both gap counts will be set to 0.
+      al.right_tr_gap[row] = (max_i == 1) ? al.left_tr_gap[row] + 1 : 0;
+      al.right_gen_gap[row] = (max_i == 2) ? al.right_gen_gap[row-1] + 1 : 0;
+      // Check if we have crossed any intron characters;
+      if(max_i == 2){
+	if(tr[tr_i] == intron_char)
+	  al.right_int_x[row]++;
+      }else{
+	al.right_int_x[row] = 0;
+      }
+      // and set the max score and the pointer
+      al.right_scores[row] = scores[max_i];
+      set_ptr( &ptr, row, col, (unsigned char)max_i );
+      // update the maximum if appropriate;
+      if(al.right_scores[row] > max_score){
+	max_score = al.right_scores[row];
+	max_col = col;
+	max_row = row;
+      }
+    }
+    if(al.right_scores[tr_l] > last_row_max){
+      last_row_max = al.right_scores[tr_l];
+      last_row_max_col = col;
+    }
+    swap_left_right( &al );
+  }
+  
+  struct sw_alignment *alignment = malloc(sizeof(struct sw_alignment));
+  memset(alignment, 0, sizeof(struct sw_alignment));
+  int error = 0;
+  if(!global)
+    error = extract_bitp_alignment( tr, gen, &ptr, max_row, max_col, max_score, alignment);
+  else
+    error = extract_bitp_alignment( tr, gen, &ptr, tr_l, last_row_max_col, max_score, alignment);
+  // clear all the allocated memory:
+  free_al_info(&al);
+  free_al_penalty(&pen);
   free_bit_ptr(&ptr);
   return(alignment);
 }

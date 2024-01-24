@@ -253,4 +253,43 @@ struct sw_alignment *align_transcript_bitp(const unsigned char *tr, const unsign
 					   int tr_l, int gen_l, int gap_i, int gap_e, int intron_p,
 					   int *sub_table, int al_offset, int al_size, char intron_char);
 
+
+struct sw_alignment *align_transcript_bitp_ssa(const unsigned char *tr, const unsigned char *gen,
+					       int tr_l, int gen_l, float gap_i, float gap_e_mod, float fshift,
+					       float intron_new, float intron_bad, int min_intron_size,
+					       int *sub_table, int al_offset, int al_size, char intron_char,
+					       int global);
+
+static inline float gap_penalty(unsigned int gap_l, float min_is, float gap_i, float mod, float fshift[3]);
+
+// A struct to hold the set of penalties that we wish to use:
+struct al_penalty {
+  int *sub_table;
+  int al_offset;
+  int al_size;
+  char intron_char;
+  float gap_i;
+  // gap_e_mod modifies the extension: the bigger the cheaper the extension as it divides
+  float gap_e_mod; 
+  float fshift[3];
+  float intron_new;
+  float intron_bad;
+  int min_intron_size;
+  // intron starts and ends:
+  int intron_type_n;
+  // precalculated cumulative gap values for 0 -> min_intron_size;
+  // (size of array = min_intron_size + 1);
+  float *gap;
+  const char **intron_start;
+  const char **intron_end;
+};
+
+// this is just a holder; it should not allocate or free anything
+struct al_penalty init_al_penalty(int *sub_table, int al_offset, int al_size, char intron_char,
+				  float gap_i, float gap_e_mod, float fshift, float intron_new, float intron_bad, int min_intron_size,
+				  int intron_type_n, const char **intron_start, const char **intron_end
+				  );
+
+void free_al_penalty(struct al_penalty *pen);
+
 #endif

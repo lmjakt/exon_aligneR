@@ -1,4 +1,7 @@
 ## functions specific to exon alignments
+## this performs some magic that should not be necessary if created
+## as a package
+dyn.load( paste(dirname(sys.frame(1)$ofile), "src/exon_aligneR.so", sep="/") )
 
 ## A horribly slow way to read transcripts.
 read.transcripts <- function(fname){
@@ -62,6 +65,33 @@ align.exons <- function(a, b, penalties, gap.multiplier, local=FALSE, local.gene
     al
 }
 
+## This extracts blosum matrices from the blast source code tables found in 
+## Note that this makes lots of assumptions about the nature of the source
+## code that may not be true in future versions of blast.
+
+## to find the files containing the matrices:
+## (assuming that the source code to blast+ is in ~/applications
+## list.files("~/applications/blast+/", full.names=TRUE, recursive=TRUE, pattern="blosum")
+
+extract.blosum  <- function(fn){
+    lines  <- readLines(fn)
+    beg.i  <- grep("^static const TNCBIScore", lines)[1] + 1
+    end.i  <- grep("};", lines)[1] - 1
+    data  <- paste(lines[beg.i:end.i], collapse="")
+    comments   <- c()
+    while(grepl("/\\*.+?\\*/", data)){
+        comments  <- c(comments, sub(".+?/\\*(.+?)\\*/.+", "\\1", data))
+        data  <- sub("(.+?)/\\*(.+?)\\*/(.+)", "\\1 \\3", data)
+    }
+    ## the first comments line is a column header we can get rid of that
+    comments  <- comments[-1]
+    ## the rest of the numbers are scores filled by row. We can probably do:
+    scores  <- as.integer( strsplit( data, "," )[[1]] )
+    score.m  <- matrix(scores, nrow=length(comments), ncol=length(comments), byrow=TRUE )
+    rownames(score.m)  <- comments
+    colnames(score.m)  <- comments
+    score.m
+}
 
 
 make.sub.matrix <- function( al.offset=33, al.size=64, letters=c('A', 'C', 'T', 'G', 'I'),
@@ -77,6 +107,8 @@ make.sub.matrix <- function( al.offset=33, al.size=64, letters=c('A', 'C', 'T', 
     m <- matrix(as.integer(m), nrow=nrow(m))
     list('offset'=as.integer(al.offset), 'size'=as.integer(al.size), 'sm'=m)
 }
+
+
 
 ## m should be a square matrix with colnames and rownames indicating
 ## the residue names (as single characters !
@@ -166,6 +198,49 @@ local.aligns <- function( a, b, al.offset=sm$offset, al.size=sm$size, sub.matrix
     }
     sw
 }
+
+### Align transcript to genome. This allows a short sequence (1000s) to be aligned to a long
+### sequence (up to 100,000 bp tested).
+### The second option (with three values to intron.p shoud be splice site aware
+### giving different penalties to intron.p representing:
+### penalty for a new intron, penalty for an existing intron gap and minimum intron length.
+### The penalty for an existing intron gap is a bit strange, as it should score positive,
+### but it's added to prevent spurious exon junction.
+tr.to.genome  <- function(tr, gen, gap=c(-8L, -1L), intron.p=-30L, sub.matrix, use.ll=FALSE, global=FALSE){
+    tmp  <- NULL
+    if(length(intron.p) == 1){
+        tmp  <- .Call("transcript_to_genome", toupper(c(tr, gen)),
+                      sub.matrix$sm, sub.matrix$offset, sub.matrix$size,
+                      as.integer(gap), as.integer(intron.p), use.ll)
+    }
+    ## if length 3 for both, then the arguments are:
+    ## intron.p: intron_new intron_bad intron_min_size
+    ## gap: gap_insert, extension_modifier, frame_shift modifier (fshift)
+    ## The score for a gap will be:
+    ## gap_insert + log( gap_l / intron_min_size )/ extension_modifier + fs[ gap_l % 3 ]
+    ## where fs = c(-fshift, +fshift, 0)
+    ## and where f_shift is expected to be negative and indexing fs is from 0.
+    if(length(intron.p) == 3 && length(gap) == 3){
+        ## we expect that the gap value should be: negative, positive and negative
+        if(gap[1] >= 0 || gap[2] <= 0 || gap[3] >= 0)
+            warning( "gap values should usually be: negative, positive, negative" );
+        if(gap[2] == 0)
+            stop("gap[2] must not be 0 as this will result in divide by 0")
+        if(intron.p[3] <= 0)
+            stop("intron.p[3], minimal intron size, must be non-0 positive");
+        tmp  <- .Call("transcript_to_genome_ssa", toupper(c(tr, gen)),
+                      sub.matrix$sm, sub.matrix$offset, sub.matrix$size,
+                      as.double(gap), as.double(intron.p), global)
+    }
+    if(is.null(tmp))
+        stop(paste("Length of intron.p is not 1 or 3, but:", length(intron.p)))
+    ## give some column names
+    colnames(tmp$pos)  <- c("a_beg", "a_end", "b_beg", "b_end", "score", "al_l")
+    colnames(tmp$cigar)  <- c('op', 'n')
+    tmp
+}
+
+
 
 ### phylogenetic distance functions. These all take an object of nuc.align.stats as defined above
 ### I got these equations from :
@@ -340,13 +415,13 @@ draw.aligns <- function(al, y1, y2, h1, cols, sp.a=NULL, sp.b=NULL, w.radius=4, 
 
 ## al are two aligned sequences that ought to be the same size
 ## though we will make use of the first one
-align.print <- function( al, w, off.1=1, off.2=1 ){
+align.print <- function( al, w=with(options(), width-8), off.1=1, off.2=1, sep=1 ){
     nc <- max(nchar(al[1:2]))
     if(length(al) > 1 && is.finite(nc)){
         beg <- seq(1, nc, w)
         for(b in beg){
-            s1 <- substr(al[1], b, b+w)
-            s2 <- substr(al[2], b, b+w)
+            s1 <- substr(al[1], b, b+w-1)
+            s2 <- substr(al[2], b, b+w-1)
             s1.c <- strsplit(s1, '')[[1]]
             s2.c <- strsplit(s2, '')[[1]]
             s1.w <- sum(s1.c != '-')
@@ -355,6 +430,7 @@ align.print <- function( al, w, off.1=1, off.2=1 ){
             cat( sprintf("% 6d  %s\n", off.1, substr(al[1], b, b+w)) )
             cat( sprintf("        %s\n", id.line) )
             cat( sprintf("% 6d  %s\n", off.2, substr(al[2], b, b+w)) )
+            cat( paste(rep("\n", sep), collapse="" ))
             off.1 <- off.1 + s1.w
             off.2 <- off.2 + s2.w
             cat("\n")

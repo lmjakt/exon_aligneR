@@ -1214,6 +1214,122 @@ SEXP transcript_to_genome_r(SEXP seq_r, SEXP sub_matrix_r, SEXP al_offset_r, SEX
   return(ret_data);
 }
 
+// The following (rather horribly) is mostly copied from transcript_to_genome_r
+// but has a few additional parameters:
+// intron_new_p, fudge_penalty, min_intron_length
+// These can be added to the intron SEXP variable
+// They represent the penalty associated with intron creation (or destruction)
+// a penalty added to good looking introns to prevent these from being extended
+// by too short matches
+// and a minimum intron length.
+SEXP transcript_to_genome_ssa_r(SEXP seq_r, SEXP sub_matrix_r, SEXP al_offset_r, SEXP al_size_r,
+				SEXP gap_r, SEXP intron_r, SEXP global_r){
+  if(TYPEOF(seq_r) != STRSXP || length(seq_r) != 2)
+    error("seq_r should be a character vector of length 2");
+  if(TYPEOF(sub_matrix_r) != INTSXP || !isMatrix(sub_matrix_r) )
+    error("sub_matrix_r should be a numeric matrix");
+  if(TYPEOF(al_offset_r) != INTSXP || TYPEOF(al_size_r) != INTSXP )
+    error("al_offset_r and al_size_r must both be ints");
+  if(TYPEOF(gap_r) != REALSXP || length(gap_r) != 3 )
+    error("gap_r should be a REAL vector of length 3 (insertion, extension modifier, frame shift)");
+  if(TYPEOF(intron_r) != REALSXP || length(intron_r) != 3)
+    error("intron_r should be a REAL vector of length 3 (intron_new, intron_bad, min_intron_length");
+  if(TYPEOF(global_r) != LGLSXP || length(global_r) != 1)
+    error("global_r should be a logical vector of length 1");
+
+  // make C-variables
+  int al_offset = asInteger(al_offset_r);
+  int al_size = asInteger(al_size_r);
+  SEXP sub_matrix_dims = getAttrib(sub_matrix_r, R_DimSymbol);
+  int nrow = INTEGER(sub_matrix_dims)[0];
+  int ncol = INTEGER(sub_matrix_dims)[1];
+  if(nrow != ncol || nrow != al_size)
+    error("faulty matrix dimensions: %d, %d should both be: %d", nrow, ncol, al_size);
+  int *sub_table = INTEGER( sub_matrix_r );
+
+  int tr_l = length( STRING_ELT( seq_r, 0 ));
+  const unsigned char *tr_seq = (const unsigned char*)CHAR( STRING_ELT( seq_r, 0 ));
+  int gen_l = length( STRING_ELT( seq_r, 1 ));
+  const unsigned char *gen_seq = (const unsigned char*)CHAR( STRING_ELT( seq_r, 1 ));
+  // these should probably be doubles in the main alignment as well
+  double *gap = REAL(gap_r);
+  double *intron = REAL(intron_r);
+  if(intron[2] < 4)
+    error("The minimum intron length must be longer than 4");
+  if(intron[0] > 0 || intron[1] > 0)
+    error("Intron penalties should be negative values!");
+  
+  int global = (int)asLogical(global_r);
+
+  struct sw_alignment *align = align_transcript_bitp_ssa(tr_seq, gen_seq, tr_l, gen_l,
+							 (float)gap[0], (float)gap[1], (float)gap[2], 
+							 (float)intron[0], (float)intron[1], (int)intron[2],
+							 sub_table, al_offset, al_size, 'I', global);
+
+  if(!align)
+    error("Alignment returned a NULL pointer");
+  
+  // return
+  // pos (vector 6 elements, ranges (4), score, al_length)
+  // cigar (int matrix number of ops times 2 columns)
+  // seq (char with two elements; 
+  SEXP ret_data = PROTECT(allocVector(VECSXP, 3));
+  const char* names[5] = {"pos", "cigar", "seq"};
+  SEXP names_r = PROTECT(allocVector(STRSXP, 3));
+  for(int i=0; i < 3; ++i)
+    SET_STRING_ELT(names_r, i, mkChar(names[i]));
+  setAttrib( ret_data, R_NamesSymbol, names_r );
+  UNPROTECT(1);
+  
+  //  SET_VECTOR_ELT( ret_data, 0, allocVector(INTSXP, 6)); // would be nice to name this as well
+  // make the first object a matrix to be the same as other align data structures
+  SET_VECTOR_ELT( ret_data, 0, allocMatrix(INTSXP, 1, 6)); // would be nice to name this as well
+  SET_VECTOR_ELT( ret_data, 1, allocMatrix(INTSXP, align->cigar_length, 2));
+  SET_VECTOR_ELT( ret_data, 2, allocVector(STRSXP, 2));
+
+  int *pos = INTEGER( VECTOR_ELT(ret_data, 0) );
+  int pos_ar[6] = {align->row_begin, align->row_end, align->col_begin, align->col_end, align->score, align->al_length};
+  for(int i=0; i < 6; ++i)
+    pos[i] = pos_ar[i];
+  int *cigar = INTEGER( VECTOR_ELT(ret_data, 1) );
+  SEXP al_seq = VECTOR_ELT( ret_data, 2 );
+  SET_STRING_ELT(al_seq, 0, mkChar(align->a_al));
+  SET_STRING_ELT(al_seq, 1, mkChar(align->b_al));
+  for(int i=0; i < align->cigar_length; ++i){
+    cigar[i] = (int)align->cigar_ops[i];
+    cigar[i + align->cigar_length] = align->cigar_n[i];
+  }
+  free_sw_alignments( align );
+  UNPROTECT(1);
+  return(ret_data);
+}
+
+// transcript_to_genome_ssa makes use of a dynamic gap alignment score from
+// gaps of 0 length to a minimal intron size. It is a bit difficult to visualise
+// the gap scores that arise from this; so here we provide a function that
+// returns a gap structure.
+
+SEXP gap_penalty_ssa(SEXP par_r){
+  if(TYPEOF(par_r) != REALSXP || length(par_r) != 4)
+    error("par should be real vector containing: gap_i (-), gap_e_mod (+), frame_shift_p (-), min_intron_size");
+  double *par = REAL(par_r);
+  float gap_i = par[0];
+  float gap_e_mod = par[1];
+  float fshift = par[2];
+  int min_intron_size = (int)par[3];
+  struct al_penalty pen = init_al_penalty(0, 0, 0, 0,
+					  gap_i, gap_e_mod, fshift, 0, 0, min_intron_size,
+					  0, 0, 0);
+  SEXP gap_p_r = PROTECT(allocVector(REALSXP, pen.min_intron_size + 1));
+  // We can't memcpy because the penalties are expressed as floats.. 
+  double *gap_p = REAL(gap_p_r);
+  for(int i=0; i <= pen.min_intron_size; ++i)
+    gap_p[i] = pen.gap[i];
+  free_al_penalty(&pen);
+  UNPROTECT(1);
+  return(gap_p_r);
+}
+
 static const R_CallMethodDef callMethods[] = {
   {"align_exons", (DL_FUNC)&align_exons, 8},
   {"align_seqs", (DL_FUNC)&align_seqs, 8},
@@ -1223,6 +1339,8 @@ static const R_CallMethodDef callMethods[] = {
   {"rev_complement", (DL_FUNC)&reverse_complement, 1},
   {"local_score_R", (DL_FUNC)&local_score_R, 6},
   {"transcript_to_genome", (DL_FUNC)&transcript_to_genome_r, 7},
+  {"transcript_to_genome_ssa", (DL_FUNC)&transcript_to_genome_ssa_r, 7},
+  {"gap_penalty_ssa", (DL_FUNC)&gap_penalty_ssa, 1},
   {NULL, NULL, 0}
 };
 

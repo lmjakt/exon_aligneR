@@ -1,4 +1,4 @@
-dyn.load("src/exon_aligneR.so")
+## dyn.load("src/exon_aligneR.so")
 source("functions.R")
 
 ## then we read in a file of sequences
@@ -212,7 +212,7 @@ al.offset <- as.integer(33)
 sub.matrix <- make.sub.matrix(al.offset=al.offset, al.size=al.size,
                               letters=c('A', 'C', 'T', 'G', 'I'), match=c(4,4,4,4, 30) )
 
-dyn.load("src/exon_aligneR.so")
+## dyn.load("src/exon_aligneR.so")
 
 tmp <- .Call("align_seqs", exon.i[1], exon.i[14], al.offset, al.size, sub.matrix, as.integer(c(-10, -1)), TRUE, "I" )
 
@@ -614,3 +614,89 @@ seq <- c("ACTAGAAIAA-----ACAT",
 local.score( seq, 3L, -8L, sub.matrix )
 
 plot(local.score( seq, 3L, -8L, sub.matrix ), type='b')
+
+## test the tr.to.genome function
+## note that I have already used the tr.to.genome function with intron.p=-30
+## what I want to do here is to test it with something like:
+## intron.p=as.integer(c(-40, -16, 75))
+
+## I need to add some generalised fasta reading functions. Too much of a mess at the moment.
+
+cds.f  <- list.files(pattern="*cds.fa$")
+names(cds.f)  <- sub("([^_]+)_.+", "\\1", cds.f)
+
+cds.seq  <- lapply(cds.f, function(fn){
+    l  <- readLines(fn)
+    l.id  <- grep("^>",  l)
+    l.e  <- c(l.id -1, length(l))[-1]
+    lapply(1:length(l.id), function(i){ l[ (l.id[i]+1):l.e[i] ] })
+})
+
+prdm9.tr  <-  lapply( cds.seq, function(x){ unlist(lapply(x, function(y){ toupper(paste(y, collapse="I")) }))})
+
+tmp  <- readLines( "prdm9_test_loci.fa" )
+test.loci  <- tmp[ seq(2, length(tmp), 2) ]
+names(test.loci)  <- tmp[ seq(1, length(tmp), 2) ]
+
+## we can try the two differen functions:
+## note that for this to work, the intron character should have no matching score
+
+sm  <- make.sub.matrix( letters=c('A', 'C', 'T', 'G'), match=c(4, 4, 4, 4))
+
+
+source('functions.R')
+tr  <- prdm9.tr[[2]]
+tloc  <- substring(test.loci[1], 9727)
+
+tr.sub  <- substring(tr, 366, 500)
+tloc.sub  <- paste( substring(tloc, 1672, 1800), substring(tloc, 3100, 3200), sep="")
+
+
+## gap.p  <- .Call("gap_penalty_ssa", c(-8, 1, -10, 75))
+
+gap  <- c(-8, 2.0, -5.0)
+intron.p  <- c(-20, -100, 75)
+gap.p  <- .Call("gap_penalty_ssa", c(gap, intron.p[3]))
+plot(1:length(gap.p) - 1, gap.p, type='b')
+tmp  <- tr.to.genome(tr.sub, tloc.sub, gap=gap,
+                     intron.p=intron.p, sub.matrix=sm, global=FALSE)
+align.print(tmp$seq, w=100)
+
+
+
+tmp.g  <- tr.to.genome(tr.sub, tloc.sub, gap=c(-8, 2.0, -5),
+                       intron.p=c(-30, -45, 17.0), sub.matrix=sm, global=TRUE)
+
+
+tmp.l  <- tr.to.genome(tr, tloc, gap=c(-1, 1, -5),
+                       intron.p=c(-15, -25, 75), sub.matrix=sm, global=FALSE)
+
+##
+tmp.g  <- tr.to.genome(tr, tloc, gap=c(-1, 2.0, -5),
+                       intron.p=c(-15, -25, 75), sub.matrix=sm, global=TRUE)
+
+
+## tmp  <- tr.to.genome(tr, tloc, gap=c(-8L, -1L),
+##                      intron.p=c(-30L, -10L, 75L), sub.matrix=sm, use.ll=FALSE)
+
+
+tmp2  <- tr.to.genome(tr.sub, tloc.sub, gap=c(-8L, -1L),
+                     intron.p=c(-30L), sub.matrix=sm, use.ll=FALSE)
+
+tmp2  <- tr.to.genome(tr, tloc, gap=c(-8L, -1L),
+                     intron.p=c(-30L), sub.matrix=sm, use.ll=FALSE)
+
+
+align.print(tmp$seq, w=100, sep=1)
+
+align.print(tmp2$seq, w=100)
+
+
+tr.al.1  <- lapply(prdm9.tr, function(tr){
+    tr.to.genome(tr, test.loci[1], gap=c(-8L, -1L), intron.p=-30L, sub.matrix=sm, use.ll=FALSE)
+})
+
+tr.al.2  <- lapply(prdm9.tr, function(tr){
+    tr.to.genome(tr, test.loci[1], gap=c(-8L, -1L),
+                 intron.p=c(-30L, -10L, 75L), sub.matrix=sm, use.ll=FALSE)
+})
